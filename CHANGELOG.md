@@ -2,7 +2,7 @@
 
 All notable changes to `@edubeam/plot` are listed here. The project follows [Semantic Versioning](https://semver.org).
 
-## 0.1.0 (unreleased)
+## 0.1.0 (2026-11-18)
 
 The first release.
 
