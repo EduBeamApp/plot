@@ -1,0 +1,50 @@
+name: Release
+
+# Publishes to npm when a version tag is pushed, e.g. v0.1.0. See RELEASING.md.
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+# id-token lets npm verify this workflow by OIDC (trusted publishing), so no NPM_TOKEN secret exists to leak.
+permissions:
+  contents: read
+  id-token: write
+
+# Never two publishes of one tag at once.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          registry-url: https://registry.npmjs.org
+
+      # Trusted publishing needs npm 11.5.1 or later; Node 22 ships npm 10.
+      - run: npm install -g npm@^11.5.1
+
+      # The tag names the version being released: it must be the one in package.json.
+      - name: Check the tag matches package.json
+        run: |
+          expected="v$(node -p "require('./package.json').version")"
+          if [ "$GITHUB_REF_NAME" != "$expected" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match package.json version ($expected)"
+            exit 1
+          fi
+
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run test:run
+      - run: npm run build
+
+      # Provenance links the published package to this workflow run and commit on npmjs.com.
+      # prepublishOnly checks and builds once more, so a stale dist/ can never ship.
+      - run: npm publish --provenance --access public

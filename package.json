@@ -1,0 +1,79 @@
+{
+  "name": "@edubeam/plot",
+  "version": "0.1.0",
+  "description": "Vue 3 components that draw 2D structures and their analysis results (supports, loads, reactions, N/V/M diagrams, deformed shape) as SVG.",
+  "author": {
+    "name": "Jan Voříšek",
+    "url": "https://github.com/janvorisek"
+  },
+  "license": "GPL-3.0",
+  "homepage": "https://www.edubeam.app/plot",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/EduBeamApp/plot.git"
+  },
+  "bugs": {
+    "url": "https://github.com/EduBeamApp/plot/issues"
+  },
+  "keywords": [
+    "structural-analysis",
+    "fem",
+    "finite-element",
+    "vue",
+    "svg",
+    "beam",
+    "frame",
+    "truss",
+    "bending-moment",
+    "shear-force",
+    "diagram",
+    "ts-fem"
+  ],
+  "type": "module",
+  "sideEffects": false,
+  "files": [
+    "dist",
+    "CHANGELOG.md"
+  ],
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "engines": {
+    "node": ">=20.19"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build && vue-tsc -p tsconfig.build.json",
+    "typecheck": "vue-tsc -p tsconfig.json --noEmit",
+    "test": "vitest",
+    "test:run": "vitest run",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "screenshots": "node scripts/screenshots.mjs",
+    "prepublishOnly": "npm run typecheck && npm run test:run && npm run build"
+  },
+  "peerDependencies": {
+    "ts-fem": ">=0.2.3",
+    "vue": "^3.5.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^6.0.11",
+    "prettier": "^3.9.9",
+    "ts-fem": "github:janvorisek/ts-fem#57de87467d317c61c4ddd45289de0513faf890ff",
+    "typescript": "^5.9.3",
+    "vite": "^8.3.8",
+    "vitest": "^5.1.1",
+    "vue": "^3.5.43",
+    "vue-tsc": "^3.3.14"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
