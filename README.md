@@ -79,7 +79,7 @@ The plot measures its container with a `ResizeObserver` and lays out at that wid
 
 | Prop                  | Type                                   | Default                                | Description                                                                                                                       |
 | --------------------- | -------------------------------------- | -------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| `solver`              | `Solver` from `@edubeam/fem`           | none                                   | A solver. Results are drawn once its load case is solved.                                                                  |
+| `solver`              | `Solver` from `@edubeam/fem`           | none                                   | A solver. Results are drawn once its load case is solved.                                                                         |
 | `model`               | `PlotModel`                            | none                                   | Or the plain data `modelFromSolver` makes, for example prepared at build time. Takes precedence over `solver`.                    |
 | `loadCase`            | `number`                               | `0`                                    | Index into `solver.loadCases`.                                                                                                    |
 | `revision`            | `number`                               | `0`                                    | Change it to redraw a solver that was changed in place.                                                                           |

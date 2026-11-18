@@ -52,7 +52,17 @@ import { formatNumber, formatQuantity, type Unit, type Units } from './units';
 
 /** What the caller switches on and off. Results are named by their symbol. */
 export type PlotLayer =
-  'nodes' | 'nodeLabels' | 'dimensions' | 'members' | 'supports' | 'loads' | 'reactions' | 'N' | 'V' | 'M' | 'w';
+  | 'nodes'
+  | 'nodeLabels'
+  | 'dimensions'
+  | 'members'
+  | 'supports'
+  | 'loads'
+  | 'reactions'
+  | 'N'
+  | 'V'
+  | 'M'
+  | 'w';
 
 /** Every layer, in paint order: results under the structure, nodes on top as BuildSteps draws them. */
 export const PLOT_LAYERS: readonly PlotLayer[] = [
