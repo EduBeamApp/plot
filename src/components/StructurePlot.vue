@@ -7,7 +7,6 @@
  * them in without moving anything already drawn.
  */
 import { computed, onBeforeUnmount, onMounted, ref, toRaw, useId, watch } from 'vue';
-import type { Solver } from 'ts-fem';
 import { modelFromSolver } from '../core/fromSolver';
 import type { PlotModel } from '../core/model';
 import { fitScene, placeLabels, resolveScene, textWidth, type SceneItem, type Tone } from '../core/scene';
@@ -17,71 +16,24 @@ import {
   PLOT_LAYERS,
   type PlotLayer,
   type ResultLabelMode,
-  type ResultLayer,
 } from '../core/structure';
-import { DEFAULT_NUMBER_FORMAT, resolveUnits, type Units } from '../core/units';
+import { DEFAULT_NUMBER_FORMAT, resolveUnits } from '../core/units';
 import { formatReadout, readoutAt, type Readout } from '../core/readout';
-import { PLOT_CSS, toneVars, type PlotColors } from './theme';
+import { PLOT_CSS, toneVars } from './theme';
+import type { StructurePlotEmits, StructurePlotProps } from './types';
 
-const props = withDefaults(
-  defineProps<{
-    /** A ts-fem solver; solved, to show results. Pass a new one (or bump `revision`) after a change. */
-    solver?: Solver;
-    /** Or the plain data `modelFromSolver` makes, e.g. prepared at build time. */
-    model?: PlotModel;
-    loadCase?: number;
-    /** Change it to redraw a solver that was changed in place. */
-    revision?: number;
-    /** What to draw. Default: members, supports, loads, reactions and one result chosen for the structure. */
-    layers?: readonly PlotLayer[];
-    /** What to make room for; defaults to `layers`. Give the last stage's layers for a figure that builds up. */
-    reserve?: readonly PlotLayer[];
-    /** Thumbnail drawing: smaller symbols, two values per member at most, magnitudes only. */
-    compact?: boolean;
-    units?: Partial<Units>;
-    numberFormat?: Intl.NumberFormat;
-    colors?: Partial<PlotColors>;
-    /** Width before the box is measured (server rendering), px. */
-    width?: number;
-    /** Fixed height, px. Without it the height follows the drawing, up to `maxHeight`. */
-    height?: number;
-    maxHeight?: number;
-    padding?: number;
-    fontSize?: number;
-    /** Largest diagram ordinate, px. */
-    diagramSize?: number;
-    /** Largest displacement on the deformed shape, px. */
-    deformedSize?: number;
-    /** px per SI unit for a result, to draw several plots at one scale. */
-    diagramScale?: Partial<Record<ResultLayer, number>>;
-    momentOnTensionSide?: boolean;
-    /** Values upright, or turned to run along their ordinate across the member (`axis`), as in the app. */
-    resultLabelMode?: ResultLabelMode;
-    /**
-     * Label styles to make room for besides the current one, so switching `resultLabelMode` moves
-     * only the labels, not the drawing - as `reserve` does for layers.
-     */
-    reserveLabelModes?: readonly ResultLabelMode[];
-    /** Fade layers in and draw members on. Always off under prefers-reduced-motion. */
-    animate?: boolean;
-    /** Read values off the members under the pointer. Off, the plot takes no pointer input at all. */
-    hover?: boolean;
-    /** Accessible name. */
-    title?: string;
-  }>(),
-  {
-    loadCase: 0,
-    revision: 0,
-    compact: false,
-    padding: 6,
-    momentOnTensionSide: true,
-    resultLabelMode: 'horizontal',
-    animate: true,
-    hover: false,
-  }
-);
+const props = withDefaults(defineProps<StructurePlotProps>(), {
+  loadCase: 0,
+  revision: 0,
+  compact: false,
+  padding: 6,
+  momentOnTensionSide: true,
+  resultLabelMode: 'horizontal',
+  animate: true,
+  hover: false,
+});
 
-const emit = defineEmits<{ readout: [value: Readout | null] }>();
+const emit = defineEmits<StructurePlotEmits>();
 
 const titleId = useId();
 
@@ -150,9 +102,11 @@ const layout = computed(() => {
   const fitItems = (mode: ResultLabelMode): SceneItem[] => {
     const first = scene(1, mode);
     const kept = placeLabels(first, fitScene(first, box), { fontSize: fontSize.value });
-    return first.flatMap((item): SceneItem[] =>
-      item.kind !== 'text' ? [item] : kept.has(item) ? [kept.get(item)!] : []
-    );
+    return first.flatMap((item): SceneItem[] => {
+      if (item.kind !== 'text') return [item];
+      const placed = kept.get(item);
+      return placed ? [placed] : [];
+    });
   };
   // One fit for every reserved label style, so switching between them leaves the drawing in place
   const modes = [...new Set([props.resultLabelMode, ...(props.reserveLabelModes ?? [])])];

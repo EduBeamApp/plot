@@ -4,7 +4,7 @@
  *
  * Units are SI. Sections follow docs/en/guide/verification.md of the EduBeam app.
  */
-import { DofID, LinearStaticSolver } from 'ts-fem';
+import { DofID, LinearStaticSolver } from '@edubeam/fem';
 
 const { Dx, Dz, Ry } = DofID;
 const PIN = [Dx, Dz];

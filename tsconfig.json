@@ -14,10 +14,7 @@
     "skipLibCheck": true,
     "resolveJsonModule": true,
     "jsx": "preserve",
-    "types": ["vite/client"],
-    "paths": {
-      "ts-fem": ["./node_modules/ts-fem/dist/index.d.ts"]
-    }
+    "types": ["vite/client"]
   },
   "include": ["src/**/*.ts", "src/**/*.vue", "playground/**/*.ts", "playground/**/*.vue", "vite.config.ts"]
 }

@@ -3,7 +3,7 @@
  * src/utils/examples.ts (`examples`, `buildExampleSolver`) without its viewer flags, so the
  * playground and the tests draw exactly what the app's gallery tiles draw.
  */
-import { DofID, LinearStaticSolver } from 'ts-fem';
+import { DofID, LinearStaticSolver } from '@edubeam/fem';
 
 export interface AppExample {
   id: string;

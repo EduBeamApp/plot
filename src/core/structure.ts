@@ -331,11 +331,18 @@ const awayFrom = (model: PlotModel, node: PlotNode, fallback: Vec): Vec => {
   return l > 1e-9 ? { x: -m.x / l, y: -m.z / l } : fallback;
 };
 
+/** A member's frame, which `memberFrames` made for every member: a miss is a bug, so it throws. */
+const frameOf = (frames: ReadonlyMap<string, MemberFrame>, id: string): MemberFrame => {
+  const f = frames.get(id);
+  if (!f) throw new Error(`No frame for member ${id}`);
+  return f;
+};
+
 /* ── Structure: members, hinges, supports, nodes, dimensions ─────────────────────────────── */
 
 const memberItems = (model: PlotModel, frames: ReadonlyMap<string, MemberFrame>, size: Sizes): SceneItem[] =>
   model.members.map((m, i): SceneItem => {
-    const f = frames.get(m.id)!;
+    const f = frameOf(frames, m.id);
     return {
       kind: 'path',
       group: 'members',
@@ -380,7 +387,7 @@ const hingeItems = (model: PlotModel, frames: ReadonlyMap<string, MemberFrame>, 
       continue;
     }
     for (const { m, end } of released) {
-      const f = frames.get(m.id)!;
+      const f = frameOf(frames, m.id);
       const sign = end === 0 ? 1 : -1;
       const off = r * 2 + 1;
       items.push(circle(at(f, end === 0 ? 0 : f.length, sign * f.tx * off, sign * f.tz * off)));
@@ -1125,8 +1132,7 @@ const diagramLabels = (
   q: InternalForce,
   k: number,
   side: 1 | -1,
-  options: StructureSceneOptions,
-  fmt: (v: number, u: Unit) => string
+  options: StructureSceneOptions
 ): LabelCandidate[] => {
   const unitOf = q === 'M' ? options.units.moment : options.units.force;
   const tone = DIAGRAM_TONE[q];
@@ -1198,8 +1204,6 @@ const diagramLabels = (
         Math.max(-1, ...ends.filter((o) => o !== e).map((o) => e.out.x * o.away.x + e.out.y * o.away.y));
       const ranked = [...ends].sort((a, b) => crowding(a) - crowding(b) || Math.abs(b.f.tx) - Math.abs(a.f.tx));
       const places = ranked.flatMap((e) => tipPlacements(e.tip, e.out, mode));
-      // Straight through a joint the two tips coincide and the value is an extreme: give it its unit.
-      const straight = ends.length === 2 && ends[0].out.x * ends[1].out.x + ends[0].out.y * ends[1].out.y > 0.95;
       const shown = ranked[0].v;
       push(
         places,
@@ -1270,14 +1274,14 @@ const continuesInto = (
   end: 0 | 1
 ): boolean => {
   const node = end === 0 ? member.start : member.end;
-  const f = frames.get(member.id)!;
+  const f = frameOf(frames, member.id);
   const own = endOrdinate(f, results[member.id][q], side, end);
   const scale = Math.max(1e-30, ...model.members.map((m) => maxAbs(results[m.id]?.[q] ?? [])));
   return model.members.some((other) => {
     if (other.id === member.id || !results[other.id]) return false;
     const otherEnd = other.start === node ? 0 : other.end === node ? 1 : -1;
     if (otherEnd === -1) return false;
-    const g = frames.get(other.id)!;
+    const g = frameOf(frames, other.id);
     if (Math.abs(f.tx * g.tx + f.tz * g.tz) < 0.999) return false;
     const o = endOrdinate(g, results[other.id][q], side, otherEnd as 0 | 1);
     return Math.hypot(o.x - own.x, o.y - own.y) <= 1e-4 * scale;
@@ -1300,8 +1304,7 @@ const barForceLabels = (
   model: PlotModel,
   frames: ReadonlyMap<string, MemberFrame>,
   results: Readonly<Record<string, MemberResults>>,
-  options: StructureSceneOptions,
-  fmt: (v: number, u: Unit) => string
+  options: StructureSceneOptions
 ): SceneItem[] => {
   const largest = Math.max(0, ...model.members.map((m) => maxAbs(results[m.id]?.N ?? [])));
   const unit = options.units.force;
@@ -1514,13 +1517,13 @@ export const buildStructureScene = (model: PlotModel, options: StructureSceneOpt
     for (const q of ['N', 'V', 'M'] as const) {
       if (!layers.has(q) || !(k[q] > 0)) continue;
       if (q === 'N' && isBarStructure(model, results.members)) {
-        items.push(...barForceLabels(model, frames, results.members, options, fmt));
+        items.push(...barForceLabels(model, frames, results.members, options));
         continue;
       }
       const side = diagramSide(q, options.momentOnTensionSide);
       for (const m of model.members) {
         const r = results.members[m.id];
-        const f = frames.get(m.id)!;
+        const f = frameOf(frames, m.id);
         if (r && r[q].some((p) => pieceDegree(p) !== null)) {
           const normal = { x: f.nx * side, y: f.nz * side };
           const closed = [0, 1].map(
@@ -1529,17 +1532,17 @@ export const buildStructureScene = (model: PlotModel, options: StructureSceneOpt
           items.push(...diagramShape(q, f, r[q], DIAGRAM_TONE[q], k[q], normal, options.scale, closed));
         }
       }
-      const labels = diagramLabels(model, frames, results.members, q, k[q], side, options, fmt);
+      const labels = diagramLabels(model, frames, results.members, q, k[q], side, options);
       items.push(...(options.compact ? limitPerMember(labels, 2) : labels).map((c) => c.item));
     }
     if (layers.has('w') && k.w > 0) {
       for (const m of model.members) {
         const r = results.members[m.id];
-        if (r) items.push(deformedPath(frames.get(m.id)!, r, k.w, size.deformed));
+        if (r) items.push(deformedPath(frameOf(frames, m.id), r, k.w, size.deformed));
       }
       const peak = largestDisplacement(model, frames, results.members);
       if (peak) {
-        const f = frames.get(peak.member)!;
+        const f = frameOf(frames, peak.member);
         const d = { x: peak.u * f.tx + peak.w * f.nx, y: peak.u * f.tz + peak.w * f.nz };
         const p = at(f, peak.x, k.w * d.x, k.w * d.y);
         items.push(

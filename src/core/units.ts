@@ -65,5 +65,5 @@ export const formatNumber = (value: number, format: Intl.NumberFormat = DEFAULT_
 /** "36 kN": the SI value in the given unit. A narrow no-break space keeps the two together. */
 export const formatQuantity = (si: number, unit: Unit, format?: Intl.NumberFormat): string => {
   const number = formatNumber(si * unit.scale, format);
-  return unit.symbol ? `${number} ${unit.symbol}` : number;
+  return unit.symbol ? `${number}\u202f${unit.symbol}` : number;
 };

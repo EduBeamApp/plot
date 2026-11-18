@@ -2,7 +2,7 @@
  * Reading values off a plot: the member point under the pointer, and the results there - both
  * values where a point load or a support makes a step.
  */
-import { memberFrame, nodeMap, type MemberResults, type PlotModel } from './model';
+import { memberFrame, nodeMap, type MemberFrame, type MemberResults, type PlotModel } from './model';
 import { innerBreaks, valueAt } from './polynomial';
 import { project, anchor, type Transform } from './scene';
 import { formatNumber, formatQuantity, type Units } from './units';
@@ -46,7 +46,7 @@ export const readoutAt = (model: PlotModel, t: Transform, px: number, py: number
   const results = model.results?.members;
   if (!results) return null;
   const nodes = nodeMap(model);
-  let best: { member: string; s: number; d: number; length: number } | null = null;
+  let best: { member: string; s: number; d: number; frame: MemberFrame } | null = null;
   for (const m of model.members) {
     const f = memberFrame(model, m, nodes);
     const [ax, ay] = project(t, anchor(f.x, f.z));
@@ -55,17 +55,13 @@ export const readoutAt = (model: PlotModel, t: Transform, px: number, py: number
     const ly = by - ay;
     const s = Math.min(1, Math.max(0, ((px - ax) * lx + (py - ay) * ly) / (lx * lx + ly * ly || 1)));
     const d = Math.hypot(ax + s * lx - px, ay + s * ly - py);
-    if (d <= reach && (!best || d < best.d)) best = { member: m.id, s, d, length: f.length };
+    if (d <= reach && (!best || d < best.d)) best = { member: m.id, s, d, frame: f };
   }
   if (!best || !results[best.member]) return null;
   // Six pixels either way snap to a step.
   const snap = 6 / t.s;
-  const read = readMember(results[best.member], best.s * best.length, snap);
-  const f = memberFrame(
-    model,
-    model.members.find((m) => m.id === best.member)!,
-    nodes
-  );
+  const f = best.frame;
+  const read = readMember(results[best.member], best.s * f.length, snap);
   const [x, y] = project(t, anchor(f.x + f.tx * read.x, f.z + f.tz * read.x));
   return { member: best.member, x: read.x, px: x, py: y, values: read.values };
 };

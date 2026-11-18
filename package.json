@@ -27,7 +27,7 @@
     "bending-moment",
     "shear-force",
     "diagram",
-    "ts-fem"
+    "edubeam"
   ],
   "type": "module",
   "sideEffects": false,
@@ -50,24 +50,40 @@
   },
   "scripts": {
     "dev": "vite",
-    "build": "vite build && vue-tsc -p tsconfig.build.json",
+    "build": "vite build && vue-tsc -p tsconfig.build.json && node scripts/fix-dts.mjs",
     "typecheck": "vue-tsc -p tsconfig.json --noEmit",
     "test": "vitest",
     "test:run": "vitest run",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "screenshots": "node scripts/screenshots.mjs",
-    "prepublishOnly": "npm run typecheck && npm run test:run && npm run build"
+    "prepublishOnly": "npm run lint && npm run typecheck && npm run test:run && npm run build && npm run publint",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "publint": "publint",
+    "check:types": "attw --pack --profile esm-only",
+    "coverage": "vitest run --coverage"
   },
   "peerDependencies": {
-    "ts-fem": ">=0.2.3",
+    "@edubeam/fem": "^0.3.0",
     "vue": "^3.5.0"
   },
   "devDependencies": {
+    "@arethetypeswrong/cli": "^0.18.5",
+    "@edubeam/fem": "github:EduBeamApp/fem#9f357eb73a0112062c41f7a4ac698c4eae058964",
+    "@eslint/js": "^10.0.1",
     "@vitejs/plugin-vue": "^6.0.11",
+    "@vitest/coverage-v8": "^5.1.1",
+    "@vue/test-utils": "^2.6.0",
+    "eslint": "^10.15.0",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-vue": "^10.12.1",
+    "globals": "^17.14.0",
+    "happy-dom": "^21.0.4",
     "prettier": "^3.9.9",
-    "ts-fem": "github:janvorisek/ts-fem#57de87467d317c61c4ddd45289de0513faf890ff",
+    "publint": "^0.3.25",
     "typescript": "^5.9.3",
+    "typescript-eslint": "^8.73.0",
     "vite": "^8.3.8",
     "vitest": "^5.1.1",
     "vue": "^3.5.43",

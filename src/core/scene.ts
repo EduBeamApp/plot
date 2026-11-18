@@ -531,8 +531,9 @@ export const resolveScene = (items: readonly SceneItem[], t: Transform, options:
         width: item.width,
         fill: item.fill,
       });
-    } else if (keep.has(item)) {
-      const placed = keep.get(item)!;
+    } else {
+      const placed = keep.get(item);
+      if (!placed) continue;
       const [x, y] = project(t, placed.at);
       const rotate = placed.rotate ?? 0;
       texts.push({

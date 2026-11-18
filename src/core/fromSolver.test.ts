@@ -3,7 +3,7 @@
  * through the sampled pieces the drawing is made from.
  */
 import { describe, expect, it } from 'vitest';
-import { Beam2D } from 'ts-fem';
+import { Beam2D } from '@edubeam/fem';
 import { modelFromSolver } from './fromSolver';
 import type { MemberResults, PlotModel, ReactionDof } from './model';
 import { extremes, innerBreaks, pieceDegree, valueAt } from './polynomial';

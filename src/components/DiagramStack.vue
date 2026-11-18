@@ -8,7 +8,6 @@
  * drags (`v-model:load-at`); the parent re-solves and passes the new solver back.
  */
 import { computed, onBeforeUnmount, onMounted, ref, toRaw, useId, watch } from 'vue';
-import type { Solver } from 'ts-fem';
 import { modelFromSolver } from '../core/fromSolver';
 import type { PlotModel } from '../core/model';
 import { valueAt } from '../core/polynomial';
@@ -27,56 +26,19 @@ import {
 } from '../core/stack';
 import { buildStructureScene, HATCH_SPACING_PX, type PlotLayer } from '../core/structure';
 import { DEFAULT_NUMBER_FORMAT, formatNumber, formatQuantity, resolveUnits, type Units } from '../core/units';
-import { PLOT_CSS, toneVars, type PlotColors } from './theme';
+import { PLOT_CSS, toneVars } from './theme';
+import type { DiagramStackEmits, DiagramStackProps } from './types';
 
-const props = withDefaults(
-  defineProps<{
-    solver?: Solver;
-    model?: PlotModel;
-    loadCase?: number;
-    revision?: number;
-    /** The members of the beam line; all members by default. They must form one horizontal line. */
-    members?: readonly string[];
-    /** Diagram rows, top to bottom. */
-    rows?: readonly StackRow[];
-    /** The beam with its supports, loads and reactions above the rows. */
-    loadRow?: boolean;
-    /** Value range (SI) per row, to keep a row's scale while a load moves; by default each row's own. */
-    ranges?: Partial<Record<StackRow, readonly [number, number]>>;
-    /** Row heights, px, before scaling to `maxHeight`. */
-    rowHeights?: Partial<Record<StackRow, number>>;
-    /** Rows shrink (to 60 % at most) so the whole figure fits this height. Text keeps its size. */
-    maxHeight?: number;
-    units?: Partial<Units>;
-    numberFormat?: Intl.NumberFormat;
-    colors?: Partial<PlotColors>;
-    /** Width before the box is measured (server rendering), px. */
-    width?: number;
-    fontSize?: number;
-    /** Read the rows under the pointer. Off, the figure takes no pointer input. */
-    hover?: boolean;
-    /** Line position (m) of a point load the reader may drag; leave out for a fixed figure. */
-    loadAt?: number;
-    /** Text beside the draggable load; by default "P = …". */
-    loadLabel?: string;
-    /** The drag rounds to this step, m; arrow keys move by it. */
-    loadStep?: number;
-    title?: string;
-  }>(),
-  {
-    loadCase: 0,
-    revision: 0,
-    rows: () => ['V', 'M', 'w'],
-    loadRow: true,
-    hover: true,
-    loadStep: 0.05,
-  }
-);
+const props = withDefaults(defineProps<DiagramStackProps>(), {
+  loadCase: 0,
+  revision: 0,
+  rows: () => ['V', 'M', 'w'],
+  loadRow: true,
+  hover: true,
+  loadStep: 0.05,
+});
 
-const emit = defineEmits<{
-  'update:loadAt': [at: number];
-  readout: [value: { x: number; values: Partial<Record<StackRow, { left: number; right: number }>> } | null];
-}>();
+const emit = defineEmits<DiagramStackEmits>();
 
 const titleId = useId();
 
@@ -248,9 +210,10 @@ const breaks = computed(() => [
 ]);
 
 const readout = computed(() => {
-  if (cursor.value === null) return null;
-  const snapped = breaks.value.find((b) => Math.abs(sx(b) - sx(cursor.value!)) < SNAP_PX);
-  const x = snapped ?? cursor.value;
+  const at = cursor.value;
+  if (at === null) return null;
+  const snapped = breaks.value.find((b) => Math.abs(sx(b) - sx(at)) < SNAP_PX);
+  const x = snapped ?? at;
   const values = Object.fromEntries(
     rows.value.map((r) => [r.row, { left: valueAt(r.pw, x, 'left'), right: valueAt(r.pw, x, 'right') }])
   ) as Partial<Record<StackRow, { left: number; right: number }>>;
@@ -264,7 +227,7 @@ const marks = computed(() => {
   if (!r) return [];
   const right = r.x < line.value.length * 0.7;
   return rows.value.map((row) => {
-    const v = r.values[row.row]!;
+    const v = r.values[row.row] ?? { left: 0, right: 0 };
     const unit = unitOf(row.row);
     const same = formatNumber(v.left * unit.scale, format.value) === formatNumber(v.right * unit.scale, format.value);
     const content = same
@@ -281,8 +244,10 @@ const marks = computed(() => {
 const svg = ref<SVGSVGElement | null>(null);
 const dragging = ref(false);
 const clamp = (x: number) => Math.min(line.value.length, Math.max(0, Math.round(x / props.loadStep) * props.loadStep));
-const pointer = (e: PointerEvent) => {
-  const rect = svg.value!.getBoundingClientRect();
+/** The pointer in figure px and line metres; null before the figure has a size on screen. */
+const pointer = (e: PointerEvent): { x: number; y: number } | null => {
+  const rect = svg.value?.getBoundingClientRect();
+  if (!rect || !(rect.width > 0) || !(rect.height > 0)) return null;
   return {
     x: xOf(((e.clientX - rect.left) / rect.width) * W.value),
     y: ((e.clientY - rect.top) / rect.height) * height.value,
@@ -290,17 +255,19 @@ const pointer = (e: PointerEvent) => {
 };
 
 const onDown = (e: PointerEvent) => {
-  if (props.loadAt === undefined || !loadScene.value) return;
+  const p = pointer(e);
+  if (!p || props.loadAt === undefined || !loadScene.value) return;
   // The load row moves the load; anywhere below reads values off the diagrams.
-  if (pointer(e).y > loadScene.value.bottom + 6) return;
+  if (p.y > loadScene.value.bottom + 6) return;
   dragging.value = true;
-  (e.currentTarget as Element).setPointerCapture(e.pointerId);
-  emit('update:loadAt', clamp(pointer(e).x));
+  if (e.currentTarget instanceof Element) e.currentTarget.setPointerCapture?.(e.pointerId);
+  emit('update:loadAt', clamp(p.x));
 };
 const onMove = (e: PointerEvent) => {
-  const { x } = pointer(e);
-  if (dragging.value) emit('update:loadAt', clamp(x));
-  else if (props.hover) cursor.value = x >= 0 && x <= line.value.length ? x : null;
+  const p = pointer(e);
+  if (!p) return;
+  if (dragging.value) emit('update:loadAt', clamp(p.x));
+  else if (props.hover) cursor.value = p.x >= 0 && p.x <= line.value.length ? p.x : null;
 };
 const onUp = () => (dragging.value = false);
 const onLeave = () => (cursor.value = null);
@@ -501,8 +468,18 @@ const bottom = computed(() => {
           :fill="colour('brand')"
         />
         <circle class="ebp-grip" :cx="handle.x" :cy="handle.y - 80" r="9" :fill="colour('brand')" />
+        <!-- The keyboard focus: a ring in the ink colour, clear of the grip, on any background -->
+        <circle
+          class="ebp-focus-ring"
+          :cx="handle.x"
+          :cy="handle.y - 80"
+          r="16"
+          fill="none"
+          :stroke="colour('ink')"
+          stroke-width="2"
+        />
         <text
-          :x="handle.x + (handle.nearEnd ? -16 : 16)"
+          :x="handle.x + (handle.nearEnd ? -22 : 22)"
           :y="handle.y - 76"
           :text-anchor="handle.nearEnd ? 'end' : 'start'"
           :fill="colour('brand')"

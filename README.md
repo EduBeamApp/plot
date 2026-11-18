@@ -2,7 +2,7 @@
 
 Vue 3 components that draw plane structures and their analysis results as SVG: members, supports, loads, reactions,
 the normal force, shear force and bending moment diagrams, and the deformed shape. The structure is solved by
-[ts-fem](https://github.com/janvorisek/ts-fem), the finite element solver behind [EduBeam](https://www.edubeam.app).
+[@edubeam/fem](https://github.com/EduBeamApp/fem), the finite element solver behind [EduBeam](https://www.edubeam.app).
 
 Documentation and live examples: <https://www.edubeam.app/plot>
 
@@ -16,34 +16,28 @@ Documentation and live examples: <https://www.edubeam.app/plot>
   point loads. Steps are drawn as true verticals, extremes are found exactly, and curves are drawn as exact Béziers.
 - **Real pixel sizes.** Text, symbols and line weights stay the same size whatever the size of the model, so a plot
   stays legible on a phone.
-- **Standalone.** It needs only Vue and ts-fem, with no UI framework, store or i18n library. Colours come from CSS
+- **Standalone.** It needs only Vue and @edubeam/fem, with no UI framework, store or i18n library. Colours come from CSS
   custom properties, so it follows the page's light and dark themes.
 
 ## Install
 
-`vue` (3.5 or later) and `ts-fem` are peer dependencies.
-
-ts-fem is not published on npm yet, so install it from GitHub, in the same command as this package:
+`vue` (3.5 or later) and `@edubeam/fem`, the solver, are peer dependencies:
 
 ```sh
-npm install @edubeam/plot vue github:janvorisek/ts-fem
+npm install @edubeam/plot @edubeam/fem vue
 ```
-
-Installing `@edubeam/plot` on its own fails for now. npm 7 and later install peer dependencies automatically, and
-there is no `ts-fem` on the npm registry for it to find. Once ts-fem is on npm, a plain `npm install @edubeam/plot`
-will do.
 
 The package is ESM only and ships its own TypeScript types. It needs no stylesheet import: the few CSS rules a plot
 uses are inlined into each SVG.
 
 ## Quick start
 
-Build and solve a model with ts-fem (SI units throughout: m, N, Pa), then hand the solver to a component:
+Build and solve a model with @edubeam/fem (SI units throughout: m, N, Pa), then hand the solver to a component:
 
 ```vue
 <script setup lang="ts">
 import { markRaw } from 'vue';
-import { DofID, LinearStaticSolver } from 'ts-fem';
+import { DofID, LinearStaticSolver } from '@edubeam/fem';
 import { DiagramStack, StructurePlot } from '@edubeam/plot';
 
 // A 6 m simply supported beam under 12 kN/m
@@ -68,7 +62,7 @@ const beam = markRaw(solver);
 
 The plot shows the 36 kN reactions and the 54 kNm moment at mid-span, hanging below the beam on the tension side.
 
-The model follows ts-fem's axes: x to the right, z down. A downward load is a positive `fz`, and a sagging moment is
+The model follows the solver's axes: x to the right, z down. A downward load is a positive `fz`, and a sagging moment is
 positive. After changing a solver in place, pass a new one or bump the `revision` prop to redraw.
 
 ## StructurePlot
@@ -85,7 +79,7 @@ The plot measures its container with a `ResizeObserver` and lays out at that wid
 
 | Prop                  | Type                                   | Default                                | Description                                                                                                                       |
 | --------------------- | -------------------------------------- | -------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| `solver`              | ts-fem `Solver`                        | none                                   | A ts-fem solver. Results are drawn once its load case is solved.                                                                  |
+| `solver`              | `Solver` from `@edubeam/fem`           | none                                   | A solver. Results are drawn once its load case is solved.                                                                  |
 | `model`               | `PlotModel`                            | none                                   | Or the plain data `modelFromSolver` makes, for example prepared at build time. Takes precedence over `solver`.                    |
 | `loadCase`            | `number`                               | `0`                                    | Index into `solver.loadCases`.                                                                                                    |
 | `revision`            | `number`                               | `0`                                    | Change it to redraw a solver that was changed in place.                                                                           |
@@ -199,7 +193,7 @@ figure's x axis is the beam's.
 
 | Prop           | Type                               | Default                                        | Description                                                                             |
 | -------------- | ---------------------------------- | ---------------------------------------------- | --------------------------------------------------------------------------------------- |
-| `solver`       | ts-fem `Solver`                    | none                                           | The solved beam.                                                                        |
+| `solver`       | `Solver` from `@edubeam/fem`       | none                                           | The solved beam.                                                                        |
 | `model`        | `PlotModel`                        | none                                           | Or plain data from `modelFromSolver`.                                                   |
 | `loadCase`     | `number`                           | `0`                                            | Index into `solver.loadCases`.                                                          |
 | `revision`     | `number`                           | `0`                                            | Change it to redraw a solver that was changed in place.                                 |
@@ -233,12 +227,35 @@ it. The component only reports the new position: re-solve the beam with the load
 To keep a row's scale while the load moves, set `ranges` to the envelope over every load position. The diagrams then
 grow and shrink as the load moves, instead of rescaling.
 
+## Types and the plugin
+
+The props and events of both components are exported, so a page can type its own wrappers around them:
+`StructurePlotProps`, `StructurePlotEmits`, `DiagramStackProps`, `DiagramStackEmits` and `StackReadout`, as well as
+`PlotLayer`, `ResultLabelMode`, `PlotModel` and the other types the props use.
+
+```ts
+import type { PlotLayer, StructurePlotProps } from '@edubeam/plot';
+
+const figure: StructurePlotProps = { layers: ['members', 'supports', 'M'] satisfies PlotLayer[], compact: true };
+```
+
+To register both components globally instead of importing them where they are used:
+
+```ts
+import { EduBeamPlot } from '@edubeam/plot';
+
+app.use(EduBeamPlot); // <StructurePlot> and <DiagramStack> in every template
+```
+
+Named imports keep a bundle smaller: a page that imports only `StructurePlot` gets neither `DiagramStack` nor the
+plugin, and one that imports only `modelFromSolver` gets no component code at all.
+
 ## Functions
 
 Everything the components draw comes from pure, framework-free functions, exported for custom figures and for
 preparing data ahead of time:
 
-- **`modelFromSolver(solver, { loadCase })`** reads a ts-fem solver into a `PlotModel`. The model holds geometry,
+- **`modelFromSolver(solver, { loadCase })`** reads a solver into a `PlotModel`. The model holds geometry,
   supports, loads, reactions, and each member's `N`, `V`, `M`, `u` and `w` as piecewise polynomials along the member.
   It is plain, JSON-serialisable data, so a site can solve at build time and ship only the result.
 - **Piecewise polynomials:** `valueAt(pw, x, 'left' | 'right')`, `slopeAt`, `extremes`, `innerBreaks`,
@@ -328,7 +345,8 @@ Minus signs are written as a true minus (−), and a value that rounds to zero n
   - Each figure is labelled by an SVG `<title>`, set from the `title` prop or describing what is shown.
   - Layers that are reserved but hidden are `aria-hidden`.
   - The draggable load in `DiagramStack` is a focusable `role="slider"` with its value range and position. The arrow
-    keys move it by `loadStep`, Page Up and Page Down by 1 m, and Home and End to the ends of the beam.
+    keys move it by `loadStep`, Page Up and Page Down by 1 m, and Home and End to the ends of the beam. Keyboard focus
+    shows a ring around its grip.
   - Under `prefers-reduced-motion`, nothing animates.
 - **Scrolling and taps.**
   - A plot never captures the mouse wheel or touch gestures. A static plot (`StructurePlot` without `hover`)
@@ -347,9 +365,12 @@ screenshot checks run in Chromium.
 ```sh
 npm install
 npm run dev        # the playground: textbook cases, the app's examples, staged figures
-npm run test:run   # Vitest: closed-form checks of the results, layout and labels
+npm run test:run   # Vitest: closed-form checks, layout and labels, the components in happy-dom and on the server
+npm run coverage   # the same, with coverage; thresholds in vite.config.ts
+npm run lint       # ESLint: typescript-eslint, eslint-plugin-vue
 npm run typecheck  # vue-tsc, strict
 npm run build      # dist/: the library bundle and its .d.ts files
+npm run publint && npm run check:types   # the package as consumers resolve it
 ```
 
 Source: <https://github.com/EduBeamApp/plot>. Report bugs and ideas in its
@@ -357,7 +378,7 @@ Source: <https://github.com/EduBeamApp/plot>. Report bugs and ideas in its
 
 ## Author
 
-Jan Voříšek ([github.com/janvorisek](https://github.com/janvorisek)), author of EduBeam and ts-fem.
+Jan Voříšek ([github.com/janvorisek](https://github.com/janvorisek)), author of EduBeam.
 
 ## License
 

@@ -1,6 +1,14 @@
 export { default as StructurePlot } from './components/StructurePlot.vue';
 export { default as DiagramStack } from './components/DiagramStack.vue';
 export { DEFAULT_COLORS, PLOT_CSS, toneVars, type PlotColors } from './components/theme';
+export type {
+  DiagramStackEmits,
+  DiagramStackProps,
+  StackReadout,
+  StructurePlotEmits,
+  StructurePlotProps,
+} from './components/types';
+export { EduBeamPlot } from './plugin';
 
 export { modelFromSolver, type FromSolverOptions } from './core/fromSolver';
 export * from './core/model';

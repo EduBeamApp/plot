@@ -32,3 +32,23 @@ describe('StructurePlot on the server', () => {
     expect(html).not.toContain('touch-action');
   });
 });
+
+describe('both components on the server', () => {
+  it('render real SVG without touching window or document during setup', async () => {
+    // This file runs in Node: any access to a browser global would throw here, not pass silently.
+    expect(typeof window).toBe('undefined');
+    expect(typeof document).toBe('undefined');
+    const { default: DiagramStack } = await import('./DiagramStack.vue');
+    const { overhangingBeam } = await import('../testing/structures');
+    const solver = overhangingBeam(3.2);
+    const html = await render(() => [
+      h(StructurePlot, { solver, layers: ['members', 'supports', 'loads', 'reactions', 'M'] }),
+      h(DiagramStack, { solver, loadAt: 3.2 }),
+    ]);
+    expect(html.match(/<svg/g)).toHaveLength(2);
+    // Members, ordinates and labels are real geometry, not placeholders.
+    expect(html).toMatch(/<path d="M[\d.]+ [\d.]+L[\d.]+ [\d.]+"/);
+    expect(html).toContain('role="slider"');
+    expect(html).toContain('aria-valuenow="3.2"');
+  });
+});

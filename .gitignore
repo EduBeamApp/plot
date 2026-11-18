@@ -3,3 +3,4 @@ dist/
 dist-playground/
 .screenshots/
 *.tsbuildinfo
+coverage/

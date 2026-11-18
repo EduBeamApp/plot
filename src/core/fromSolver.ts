@@ -1,5 +1,5 @@
 /**
- * Turns a ts-fem solver into the plain PlotModel: geometry, supports, loads, and - when the load
+ * Turns a solver from @edubeam/fem into the plain PlotModel: geometry, supports, loads, and - when the load
  * case is solved - the reactions and every member's results as exact piecewise polynomials.
  */
 import {
@@ -12,7 +12,7 @@ import {
   type LoadCase,
   type Node,
   type Solver,
-} from 'ts-fem';
+} from '@edubeam/fem';
 import type { MemberResults, PlotLoad, PlotModel, PlotNode, PlotReaction, ReactionDof } from './model';
 import { cleanPiecewise, fitPiece, maxAbs, type Piecewise } from './polynomial';
 
@@ -46,7 +46,7 @@ const toPlotNode = (node: Node): PlotNode => ({
   angle: nodeAngle(node),
 });
 
-/** ts-fem hands back a number, an array or a mathjs matrix depending on how many DOFs there are. */
+/** The solver hands back a number, an array or a mathjs matrix depending on how many DOFs there are. */
 const toNumbers = (values: unknown): number[] => {
   if (typeof values === 'number') return [values];
   if (Array.isArray(values)) return values.flatMap((v: unknown) => toNumbers(v));
@@ -200,7 +200,7 @@ const extractReactions = (solver: Solver, lc: LoadCase, connected: ReadonlySet<s
   return reactions.map((r) => (Math.abs(r.value) <= zero ? { ...r, value: 0 } : r));
 };
 
-/** Reads a ts-fem solver into plain data. Results are included only for a solved load case. */
+/** Reads a solver into plain data. Results are included only for a solved load case. */
 export const modelFromSolver = (solver: Solver, options: FromSolverOptions = {}): PlotModel => {
   const lc = solver.loadCases[options.loadCase ?? 0];
   if (!lc) throw new Error(`The solver has no load case ${options.loadCase ?? 0}`);

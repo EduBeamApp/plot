@@ -4,7 +4,7 @@
 import { expect, test } from 'vitest';
 import { createSSRApp, h, markRaw } from 'vue';
 import { renderToString } from 'vue/server-renderer';
-import { DofID, LinearStaticSolver } from 'ts-fem';
+import { DofID, LinearStaticSolver } from '@edubeam/fem';
 import { StructurePlot, DiagramStack, modelFromSolver, valueAt, extremes } from './index';
 
 test('README quick start', async () => {

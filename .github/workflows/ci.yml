@@ -19,12 +19,18 @@ jobs:
           node-version: 22
           cache: npm
 
-      # The lockfile pins every dependency, ts-fem's GitHub commit included.
+      # The lockfile pins every dependency.
       - run: npm ci
       - run: npm run format:check
+      - run: npm run lint
       - run: npm run typecheck
-      - run: npm run test:run
+      # The tests, with coverage that may not fall below the thresholds in vite.config.ts.
+      - run: npm run coverage
       - run: npm run build
+
+      # The published package as consumers see it: exports, files, and types under every resolution mode.
+      - run: npm run publint
+      - run: npm run check:types
 
       # Lists what would ship, so a stray file in the package shows up in the log.
       - run: npm pack --dry-run

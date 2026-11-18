@@ -49,6 +49,8 @@ export const PLOT_CSS = `
 .ebp-animate .ebp-grip,.ebp-stack .ebp-grip{transition:r .15s}
 .ebp-handle:hover .ebp-grip,.ebp-handle:focus-visible .ebp-grip,.ebp-handle.ebp-dragging .ebp-grip{r:11px}
 .ebp-handle:focus-visible .ebp-grip{stroke:var(--ebp-paper);stroke-width:3}
+.ebp-focus-ring{opacity:0}
+.ebp-handle:focus-visible .ebp-focus-ring{opacity:1}
 @media (prefers-reduced-motion:reduce){.ebp-stack .ebp-grip{transition:none}}
 @media (prefers-reduced-motion:reduce){.ebp-animate .ebp-layer,.ebp-animate .ebp-draw{transition:none}}
 `.trim();

@@ -11,7 +11,7 @@ export default defineConfig({
       fileName: 'index',
     },
     rolldownOptions: {
-      external: ['vue', 'ts-fem'],
+      external: ['vue', '@edubeam/fem'],
     },
     sourcemap: true,
     emptyOutDir: true,
@@ -19,5 +19,13 @@ export default defineConfig({
   test: {
     include: ['src/**/*.test.ts'],
     environment: 'node',
+    coverage: {
+      provider: 'v8',
+      include: ['src/**/*.{ts,vue}'],
+      exclude: ['src/**/*.test.ts', 'src/testing/**'],
+      reporter: ['text', 'html'],
+      // The levels reached at 0.1.0, rounded down: coverage may grow, not shrink.
+      thresholds: { statements: 94, branches: 82, functions: 96, lines: 97 },
+    },
   },
 });

@@ -6,7 +6,7 @@ All notable changes to `@edubeam/plot` are listed here. The project follows [Sem
 
 The first release.
 
-- **`StructurePlot`** draws a plane frame, beam or truss solved by ts-fem.
+- **`StructurePlot`** draws a plane frame, beam or truss solved by @edubeam/fem.
   - It draws members, hinges, supports for every DOF combination (rotated supports included), loads, reactions, the
     N, V and M diagrams, and the deformed shape.
   - It fits itself to the width of its box at real pixel size, and makes room for every label it keeps.
@@ -24,6 +24,9 @@ The first release.
   - Rows keep a fixed scale with `ranges`, and shrink to fit `maxHeight`.
 - **Exact results.** `modelFromSolver` stores each member's results as piecewise polynomials, split at point loads,
   in a plain, JSON-serialisable `PlotModel`. Extremes are found exactly, and curves are drawn as exact Béziers.
+- **Types and plugin.** `StructurePlotProps`, `DiagramStackProps` and their emit types are exported for typed
+  wrappers. `app.use(EduBeamPlot)` registers both components globally. Declarations resolve under bundler, node16 and
+  nodenext module resolution.
 - **Theming** through CSS custom properties, with system-colour fallbacks, so a page's light and dark themes apply.
 - **Server rendering, accessibility and scrolling.** It renders on the server, has accessible names and a keyboard
   slider for the draggable load, and respects `prefers-reduced-motion`. A static plot never captures scrolling or
