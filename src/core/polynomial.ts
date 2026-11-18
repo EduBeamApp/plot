@@ -51,7 +51,7 @@ const solveDense = (a: number[][], b: number[]): number[] => {
       b[row] -= f * b[col];
     }
   }
-  const x = new Array<number>(n).fill(0);
+  const x = Array.from({ length: n }, () => 0);
   for (let row = n - 1; row >= 0; row--) {
     let sum = b[row];
     for (let k = row + 1; k < n; k++) sum -= a[row][k] * x[k];

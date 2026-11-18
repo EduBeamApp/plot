@@ -2,31 +2,24 @@
 
 This file is for maintainers and is not part of the published package.
 
-Releases are published to npm by GitHub Actions (`.github/workflows/release.yml`) when a version tag is pushed. The
-workflow authenticates with npm **trusted publishing** (OIDC), so no npm token is stored anywhere. Each release is
-published with **provenance**: a signed statement, shown on npmjs.com, of which repository, commit and workflow
-built it.
+A release is one command on a clean, up-to-date `main`:
+
+```sh
+npm run release -- patch      # or minor, major, or an exact version such as 1.4.0
+```
+
+It checks, versions, commits, tags and pushes. The tag starts `.github/workflows/release.yml`, which publishes the
+package to npm with **provenance** and creates the **GitHub Release**.
 
 ## One-time setup
 
-1. **The repository.** Create `EduBeamApp/plot` on GitHub and push `main`. `package.json` already names it in
-   `repository` and `bugs`. npm checks that `repository.url` matches the repository the workflow runs in when it
-   publishes with provenance, so keep the two in agreement.
-2. **The first publish, by hand.** npm sets up a trusted publisher in a package's settings on npmjs.com, so the
-   package has to exist first. At the time of writing (npm's documentation, 2025), npm cannot register a trusted
-   publisher for a package name that has never been published, unlike PyPI's "pending publishers". So publish 0.1.0
-   once from your machine, as an owner of the `@edubeam` organisation:
-
-   ```sh
-   npm login
-   npm publish --access public   # prepublishOnly runs typecheck, tests and build first
-   ```
-
-   This first version has no provenance; every release from the workflow will. If npm has since added a way to set up
-   a trusted publisher for a package that doesn't exist yet, use that instead, and let the workflow publish 0.1.0.
-
-3. **The trusted publisher.** On npmjs.com, open the package, then **Settings** → **Trusted publishing**, and add a
-   GitHub Actions publisher:
+1. **The npm token.** The workflow publishes with `NPM_TOKEN`, a secret of the `EduBeamApp` GitHub organisation: an
+   npm granular access token with read and write access to the `@edubeam` packages and "bypass 2FA" enabled. Make it
+   available to the `plot` repository (organisation settings → Secrets and variables → Actions).
+2. **The first publish** goes through the workflow like every other: no manual `npm publish` is needed. With the token
+   in place, `npm run release -- 0.1.0` publishes 0.1.0.
+3. **Optionally, trusted publishing.** Once the package exists on npm, open it on npmjs.com, then **Settings** →
+   **Trusted publishing**, and add a GitHub Actions publisher:
 
    | Field        | Value         |
    | ------------ | ------------- |
@@ -35,38 +28,48 @@ built it.
    | Workflow     | `release.yml` |
    | Environment  | leave empty   |
 
-4. **Optional hardening.** In the same settings, once the workflow has published a release, set publishing access to
-   require two-factor authentication and disallow tokens. Then only the workflow, or an owner with 2FA, can publish.
+   npm then authenticates the workflow by OIDC, and the token can be deleted: the publish step works without it. In
+   the same settings you can also require two-factor authentication and disallow tokens, so that only the workflow, or
+   an owner with 2FA, can publish.
 
 ## Releasing a version
 
-1. Make sure `main` is green in CI.
-2. Bump the version without tagging yet, so you can edit the changelog first:
+1. Describe the changes in `CHANGELOG.md` under a heading `## x.y.z (unreleased)`, and merge everything to `main`.
+2. Preview the release. This changes nothing:
 
    ```sh
-   npm version 0.2.0 --no-git-tag-version
+   npm run release -- minor --dry-run
    ```
 
-3. In `CHANGELOG.md`, turn the "unreleased" heading into the version and date, for example `## 0.2.0 (2027-01-15)`,
-   and list the changes.
-4. Commit both files, tag the commit with `v` plus the version, and push the commit and the tag:
+3. Release:
 
    ```sh
-   git commit -am "release: 0.2.0"
-   git tag v0.2.0
-   git push origin main v0.2.0
+   npm run release -- minor
    ```
 
-5. The **Release** workflow runs on the tag. It fails without publishing if the tag doesn't equal `v` + the version
-   in `package.json`, or if the typecheck, the tests or the build fail. To retry after a fix, delete the tag
-   (`git push --delete origin v0.2.0`, `git tag -d v0.2.0`), fix it, and tag again. A version that reached npm can't
-   be published again, so bump to the next patch instead.
+   `scripts/release.mjs`:
+   - **refuses** unless you are on `main`, with no uncommitted changes, level with `origin/main`, and the tag does not
+     exist yet
+   - **runs every check**, as CI does: `npm run check` covers lint, format, typecheck, tests with coverage, build,
+     publint and are-the-types-wrong
+   - **sets the version** in `package.json` and `package-lock.json`
+   - **dates the changelog:** turns `## x.y.z (unreleased)` into `## x.y.z (YYYY-MM-DD)`, or adds that heading when
+     there is none
+   - **commits** `release: vX.Y.Z`, **tags** `vX.Y.Z`, and pushes the commit and the tag together
+
+4. The **Release** workflow runs on the tag. It fails without publishing if the tag doesn't match the version in
+   `package.json`, or if any check fails. Then it publishes to npm and creates the GitHub Release, whose notes are
+   the version's section of `CHANGELOG.md`.
+
+If the workflow fails before publishing, fix the cause on `main`, delete the tag
+(`git push --delete origin vX.Y.Z` and `git tag -d vX.Y.Z`), and release again. A version that reached npm can't be
+published again, so release the next patch instead.
 
 ## Checking provenance
 
-- On the package page, <https://www.npmjs.com/package/@edubeam/plot>, a published version with provenance shows a
-  **Provenance** section, with a check mark, near the bottom of the page. It names the repository, the commit and the
-  workflow run that built it, and links to the public transparency log entry (Sigstore).
+- On the package page, <https://www.npmjs.com/package/@edubeam/plot>, each version published by the workflow shows a
+  **Provenance** section, with a check mark, near the bottom. It names the repository, the commit and the workflow
+  run that built it, and links to the public transparency log entry (Sigstore).
 - From a terminal, in any project that installs the package:
 
   ```sh

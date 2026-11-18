@@ -367,10 +367,12 @@ npm install
 npm run dev        # the playground: textbook cases, the app's examples, staged figures
 npm run test:run   # Vitest: closed-form checks, layout and labels, the components in happy-dom and on the server
 npm run coverage   # the same, with coverage; thresholds in vite.config.ts
-npm run lint       # ESLint: typescript-eslint, eslint-plugin-vue
+npm run lint       # oxlint, with its TypeScript, Vue, import, unicorn and Vitest rules
+npm run format     # oxfmt (format:check only checks)
 npm run typecheck  # vue-tsc, strict
 npm run build      # dist/: the library bundle and its .d.ts files
-npm run publint && npm run check:types   # the package as consumers resolve it
+npm run check      # all of the above as CI runs them, plus publint and are-the-types-wrong
+npm run release -- patch --dry-run   # see RELEASING.md
 ```
 
 Source: <https://github.com/EduBeamApp/plot>. Report bugs and ideas in its

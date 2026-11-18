@@ -1317,8 +1317,8 @@ const barForceLabels = (
   options: StructureSceneOptions
 ): SceneItem[] => {
   const largest = Math.max(0, ...model.members.map((m) => maxAbs(results[m.id]?.N ?? [])));
-  const unit = options.units.force;
-  const number = (v: number) => formatNumber(v * unit.scale, options.numberFormat);
+  const forceUnit = options.units.force;
+  const number = (v: number) => formatNumber(v * forceUnit.scale, options.numberFormat);
   const base = options.fontSize ?? 13;
   // Down to about 10 px, never up.
   const sizes = [...new Set([base, Math.max(10, Math.min(base, 11)), Math.min(base, 10)])];

@@ -1,23 +1,25 @@
 name: Release
 
-# Publishes to npm when a version tag is pushed, e.g. v0.1.0. See RELEASING.md.
+# Runs when `npm run release` pushes a version tag (see RELEASING.md): checks, publishes to npm with
+# provenance, and creates the GitHub Release from the version's section of CHANGELOG.md.
 on:
   push:
     tags:
       - 'v*.*.*'
 
-# id-token lets npm verify this workflow by OIDC (trusted publishing), so no NPM_TOKEN secret exists to leak.
 permissions:
-  contents: read
+  # Creating the GitHub Release.
+  contents: write
+  # Provenance, and trusted publishing (OIDC) once it is set up on npmjs.com.
   id-token: write
 
-# Never two publishes of one tag at once.
+# Never two releases of one tag at once.
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
-  publish:
+  release:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -41,10 +43,19 @@ jobs:
           fi
 
       - run: npm ci
-      - run: npm run typecheck
-      - run: npm run test:run
-      - run: npm run build
+      - run: npm run check
 
-      # Provenance links the published package to this workflow run and commit on npmjs.com.
-      # prepublishOnly checks and builds once more, so a stale dist/ can never ship.
+      # Provenance links the package to this workflow run and commit on npmjs.com. NPM_TOKEN is an
+      # organisation secret (an npm granular token); without it npm authenticates by trusted publishing
+      # (OIDC). Once trusted publishing is configured for the package on npmjs.com, the token can be
+      # deleted. prepublishOnly runs the checks once more, so a stale dist/ can never ship.
       - run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Create the GitHub Release
+        run: |
+          node scripts/release-notes.mjs "$GITHUB_REF_NAME" > release-notes.md
+          gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes-file release-notes.md --verify-tag
+        env:
+          GH_TOKEN: ${{ github.token }}
