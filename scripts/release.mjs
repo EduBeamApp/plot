@@ -46,7 +46,7 @@ const newer = (a, b) => {
 
 /** CHANGELOG.md with the version's heading dated: its "unreleased" heading, or a new one on top. */
 const datedChangelog = (text, version, date) => {
-  const unreleased = new RegExp(`^## ${version.replaceAll('.', '\\.')} \\(unreleased\\)\\s*$`, 'mi');
+  const unreleased = new RegExp(`^## ${version.replaceAll('.', '\\.')} \\(unreleased\\)[ \\t]*$`, 'mi');
   if (unreleased.test(text)) return text.replace(unreleased, `## ${version} (${date})`);
   if (new RegExp(`^## ${version.replaceAll('.', '\\.')}\\b`, 'm').test(text)) {
     fail(`CHANGELOG.md already has a heading for ${version} that is not "unreleased"`);
