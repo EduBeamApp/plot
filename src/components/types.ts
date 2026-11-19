@@ -5,7 +5,7 @@ import type { Solver } from '@edubeam/fem';
 import type { PlotModel } from '../core/model';
 import type { Readout } from '../core/readout';
 import type { StackRow } from '../core/stack';
-import type { PlotLayer, ResultLabelMode, ResultLayer } from '../core/structure';
+import type { PlotLayer, ReactionLabels, ResultLabelMode, ResultLayer } from '../core/structure';
 import type { Units } from '../core/units';
 import type { PlotColors } from './theme';
 
@@ -43,10 +43,20 @@ export interface StructurePlotProps {
   /** Values upright, or turned to run along their ordinate across the member (`axis`), as in the app. */
   resultLabelMode?: ResultLabelMode;
   /**
+   * `names` draws the reactions as the unknowns of an exercise: an arrow for every restrained
+   * direction, pointing the way it counts as positive, named (A with subscript x) instead of sized.
+   */
+  reactionLabels?: ReactionLabels;
+  /**
    * Label styles to make room for besides the current one, so switching `resultLabelMode` moves
    * only the labels, not the drawing - as `reserve` does for layers.
    */
   reserveLabelModes?: readonly ResultLabelMode[];
+  /**
+   * Reaction label styles to make room for besides `reactionLabels`, so an exercise that turns into
+   * its solution (`'names'` to `'values'`) keeps its drawing where it is.
+   */
+  reserveReactionLabels?: readonly ReactionLabels[];
   /** Fade layers in and draw members on. Always off under prefers-reduced-motion. */
   animate?: boolean;
   /** Read values off the members under the pointer. Off, the plot takes no pointer input at all. */

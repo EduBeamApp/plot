@@ -3,6 +3,7 @@ import { createSSRApp, h } from 'vue';
 import { renderToString } from 'vue/server-renderer';
 import StructurePlot from './StructurePlot.vue';
 import { appExamples, buildAppExample } from '../testing/appExamples';
+import * as S from '../testing/structures';
 
 const render = (children: () => ReturnType<typeof h>[]) =>
   renderToString(createSSRApp({ render: () => h('div', children()) }));
@@ -15,7 +16,8 @@ describe('StructurePlot on the server', () => {
     expect(html).toContain('height="200"');
     expect(html).toContain('viewBox="0 0 400 200"');
     expect(html).toContain('font-size="11.5"');
-    expect(html).toContain('kNm');
+    // Labels formatted on the server: the loads with their units
+    expect(html).toMatch(/\d\u202fkN/);
   });
 
   it('gives every plot on a page its own ids', async () => {
@@ -50,5 +52,14 @@ describe('both components on the server', () => {
     expect(html).toMatch(/<path d="M[\d.]+ [\d.]+L[\d.]+ [\d.]+"/);
     expect(html).toContain('role="slider"');
     expect(html).toContain('aria-valuenow="3.2"');
+  });
+
+  it('draws an unknown reaction italic, with its subscript and a halo of its own underneath', async () => {
+    const solver = S.cantileverTipLoad();
+    const html = await render(() => [
+      h(StructurePlot, { solver, layers: ['members', 'supports', 'reactions'], reactionLabels: 'names', width: 400 }),
+    ]);
+    expect(html).toMatch(/class="ebp-halo"[^>]*font-style="italic"[^>]*>1<tspan[^>]*>x<\/tspan>/);
+    expect(html).toMatch(/class="ebp-nohalo"[^>]*font-style="italic"[^>]*>1<tspan[^>]*>x<\/tspan>/);
   });
 });

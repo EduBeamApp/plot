@@ -36,24 +36,12 @@ export interface GlyphPart {
   readonly fill?: 'paper';
 }
 
-/** Short ticks behind a wall or under a rail, falling away from it. */
-const ticks = (y: number, depth: number, xs: readonly number[]): GlyphPart[] =>
-  xs.map((x) => ({ points: [[x, y] as Point, [x - depth, y + depth] as Point], weight: 'thin' as const }));
-
-/**
- * The website's figures (HeroFigure, BuildSteps): an outlined triangle filled with the page colour,
- * its apex a hair below the node so the member's round cap stays clear of it.
+/*
+ * The EduBeam app's support symbols (its SVGViewerDefs markers), stroke for stroke, so a figure
+ * reads like the app. Turned into this frame, where +y points to the ground and x runs along it.
+ * Outlines are `regular`, hatching `thin`, a clamp's wall `bold`: 1.8, 1.2 and 2.4 px, as the app
+ * draws them at every support size.
  */
-const triangle = (height: number, half: number): GlyphPart => ({
-  points: [
-    [0, 2],
-    [-half, height],
-    [half, height],
-  ],
-  closed: true,
-  weight: 'regular',
-  fill: 'paper',
-});
 
 const line = (x0: number, y0: number, x1: number, y1: number, weight: GlyphPart['weight']): GlyphPart => ({
   points: [
@@ -63,46 +51,74 @@ const line = (x0: number, y0: number, x1: number, y1: number, weight: GlyphPart[
   weight,
 });
 
-const TICK_XS = [-10, -4, 2, 8, 14];
-
-const GLYPHS: Record<Exclude<SupportKind, 'none'>, readonly GlyphPart[]> = {
-  pin: [triangle(20, 11), line(-16, 20, 16, 20, 'regular')],
-  // A second line under the triangle's base, clear of it: the rollers' track.
-  roller: [triangle(19, 10), line(-14, 24, 14, 24, 'regular')],
-  fixed: [line(-16, 0, 16, 0, 'bold'), ...ticks(0, 6, TICK_XS)],
-  slider: [
-    line(-16, -6, 16, -6, 'regular'),
-    line(-16, 6, 16, 6, 'regular'),
-    ...ticks(6, 6, TICK_XS),
-    ...TICK_XS.map((x) => line(x, -6, x - 6, -12, 'thin')),
+/** An outlined triangle, its apex on the node and its base 30 px wide, 20 px towards the ground. */
+const TRIANGLE: GlyphPart = {
+  points: [
+    [0, 0],
+    [-15, 20],
+    [15, 20],
   ],
-  rotation: (
-    [
-      [
-        [-14, 5],
-        [-5, 5],
-        [-5, 14],
-      ],
-      [
-        [5, 14],
-        [5, 5],
-        [14, 5],
-      ],
-      [
-        [14, -5],
-        [5, -5],
-        [5, -14],
-      ],
-      [
-        [-5, -14],
-        [-5, -5],
-        [-14, -5],
-      ],
-    ] as Point[][]
-  ).map((points): GlyphPart => ({ points, weight: 'regular' })),
+  closed: true,
+  weight: 'regular',
+  // Painted with the background, so a diagram's hatching does not show through it
+  fill: 'paper',
 };
 
-export const supportGlyph = (kind: SupportKind): readonly GlyphPart[] => (kind === 'none' ? [] : GLYPHS[kind]);
+/**
+ * A wall 34 px long, a little off centre as the app draws it, with seven 10 px strokes behind it,
+ * slanting along it. `side` is +1 for the ground side, −1 for the other (a slider's second rail).
+ */
+const wall = (y: number, side: 1 | -1, weight: GlyphPart['weight']): GlyphPart[] => [
+  line(-18.5, y, 15.5, y, weight),
+  ...Array.from({ length: 7 }, (_, i) => {
+    const a = ((i + 1) * 40) / 7 - 24.5;
+    return line(a, y, a + 10, y + side * 10, 'thin');
+  }),
+];
+
+/** Three short strokes across a corner of the rotation symbol, in the quadrant (sx, sy). */
+const cornerDashes = (sx: 1 | -1, sy: 1 | -1): GlyphPart[] =>
+  [0, 1, 2].map((k) => line(sx * (8 + 4 * k), sy * 7, sx * 7, sy * (8 + 4 * k), 'thin'));
+
+const GLYPHS: Record<Exclude<SupportKind, 'none'>, readonly GlyphPart[]> = {
+  pin: [TRIANGLE],
+  // The rollers' track, 5 px under the triangle's base
+  roller: [TRIANGLE, line(-15, 25, 15, 25, 'regular')],
+  fixed: wall(0, 1, 'bold'),
+  // Two rails 10 px apart, each hatched on its outer side: it slides along them
+  slider: [...wall(5, 1, 'regular'), ...wall(-5, -1, 'regular')],
+  rotation: [
+    line(-20, 5, -5, 5, 'regular'),
+    line(-20, -5, -5, -5, 'regular'),
+    line(5, -5, 20, -5, 'regular'),
+    line(5, 5, 20, 5, 'regular'),
+    line(-5, -20, -5, -5, 'regular'),
+    line(5, -20, 5, -5, 'regular'),
+    line(5, 5, 5, 20, 'regular'),
+    line(-5, 5, -5, 20, 'regular'),
+    ...cornerDashes(1, 1),
+    ...cornerDashes(-1, -1),
+    ...cornerDashes(-1, 1),
+    ...cornerDashes(1, -1),
+  ],
+};
+
+/** Drawn at the app's default support size, 80 % of its markers' own dimensions */
+const SUPPORT_SIZE = 0.8;
+const sized = (parts: readonly GlyphPart[]): readonly GlyphPart[] =>
+  parts.map((part) => ({
+    ...part,
+    points: part.points.map(([x, y]): Point => [x * SUPPORT_SIZE, y * SUPPORT_SIZE]),
+  }));
+const SIZED: Record<Exclude<SupportKind, 'none'>, readonly GlyphPart[]> = {
+  pin: sized(GLYPHS.pin),
+  roller: sized(GLYPHS.roller),
+  fixed: sized(GLYPHS.fixed),
+  slider: sized(GLYPHS.slider),
+  rotation: sized(GLYPHS.rotation),
+};
+
+export const supportGlyph = (kind: SupportKind): readonly GlyphPart[] => (kind === 'none' ? [] : SIZED[kind]);
 
 export interface SupportPlacement {
   readonly node: string;

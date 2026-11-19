@@ -77,6 +77,11 @@ export interface ScenePath extends SceneBase {
   readonly cap?: 'round' | 'butt';
   /** A label may not cover this line (the members). */
   readonly obstacle?: boolean;
+  /**
+   * Only the labels of other, always-on layers (loads, reactions) may not cover this line: a
+   * diagram's outline, which its own numbers sit against.
+   */
+  readonly shield?: boolean;
   /** Drawn on from start to end when it appears; the number staggers members one after another. */
   readonly draw?: number;
 }
@@ -113,6 +118,8 @@ export interface SceneText extends SceneBase {
   readonly weight?: number;
   /** Font size, px; the plot's own when left out. */
   readonly size?: number;
+  /** Written after `text`, smaller and lower: the x of A_x. */
+  readonly sub?: string;
   /** Other places to try, in order, when the first is taken. */
   readonly alternatives?: readonly TextPlacement[];
 }
@@ -161,14 +168,20 @@ const charWidth = (ch: string): number => {
 export const textWidth = (text: string, size: number): number =>
   [...text].reduce((w, ch) => w + charWidth(ch), 0) * size;
 
+/** A subscript's size, as a share of its text's */
+export const SUB_SCALE = 0.75;
+/** How far a subscript drops below the baseline, as a share of its text's size */
+export const SUB_DROP = 0.28;
+
 /** The text's box around its anchor, before any rotation, in px. */
 export const textBox = (
   text: string,
   size: number,
   align: TextAlign,
-  baseline: TextBaseline
+  baseline: TextBaseline,
+  sub?: string
 ): { x0: number; x1: number; y0: number; y1: number } => {
-  const w = textWidth(text, size);
+  const w = textWidth(text, size) + (sub ? textWidth(sub, size * SUB_SCALE) : 0);
   const x0 = align === 'start' ? 0 : align === 'end' ? -w : -w / 2;
   const h = size;
   const y0 = baseline === 'top' ? 0 : baseline === 'bottom' ? -h : -h / 2;
@@ -197,7 +210,7 @@ const grow = (b: Bounds, x: number, y: number) => {
 /** The screen box of a text item at transform t, rotation included. */
 export const textBounds = (item: SceneText, t: Transform, fontSize: number): Bounds => {
   const [px, py] = project(t, item.at);
-  const box = textBox(item.text, item.size ?? fontSize, item.align, item.baseline);
+  const box = textBox(item.text, item.size ?? fontSize, item.align, item.baseline, item.sub);
   const b = emptyBounds();
   const r = ((item.rotate ?? 0) * Math.PI) / 180;
   const c = Math.cos(r);
@@ -333,6 +346,7 @@ export interface ResolvedText {
   readonly italic?: boolean;
   readonly weight?: number;
   readonly size?: number;
+  readonly sub?: string;
 }
 
 export interface ResolvedCircle {
@@ -416,6 +430,17 @@ export interface ResolveOptions {
   readonly viewport?: { readonly width: number; readonly height: number };
   /** Labels that must be left out whatever room there is. */
   readonly exclude?: ReadonlySet<SceneText>;
+  /**
+   * Groups that are never shown together (one result diagram at a time): their labels are placed
+   * after everything else and give way to it, but not to each other, so a hidden diagram's numbers
+   * never push out a load's value or the numbers of the diagram on show.
+   */
+  readonly alternativeGroups?: ReadonlySet<string>;
+  /**
+   * The groups whose `shield` lines count (the diagrams on show); all of them when left out. A
+   * hidden diagram does not keep a load's value off the place it would take.
+   */
+  readonly shields?: ReadonlySet<string>;
 }
 
 /**
@@ -428,9 +453,12 @@ export const placeLabels = (
   t: Transform,
   options: ResolveOptions
 ): Map<SceneText, SceneText> => {
-  const obstacles: [[number, number], [number, number], number][] = [];
+  /** Segments labels keep off, px, with their padding and, for a shield, the group it belongs to. */
+  const obstacles: [[number, number], [number, number], number, string | null][] = [];
   for (const item of items) {
-    if (item.kind !== 'path' || !item.obstacle) continue;
+    if (item.kind !== 'path' || !(item.obstacle || (item.shield && (options.shields?.has(item.group) ?? true))))
+      continue;
+    const owner = item.obstacle ? null : item.group;
     const pad = item.width / 2 + 1;
     let prev: [number, number] | null = null;
     for (const seg of item.segments) {
@@ -447,22 +475,42 @@ export const placeLabels = (
         for (let i = 1; i <= 12; i++) {
           const a = a0 + ((a1 - a0) * i) / 12;
           const q: [number, number] = [cx + seg.r * Math.cos(a), cy + seg.r * Math.sin(a)];
-          obstacles.push([last, q, pad]);
+          obstacles.push([last, q, pad, owner]);
           last = q;
         }
-      } else if (prev && seg.op !== 'M') obstacles.push([prev, p, pad]);
+      } else if (seg.op === 'C' && prev) {
+        // A cubic, as a few chords: its straight chord can be far from the curve (a whole member's
+        // moment parabola is one cubic from tip to tip).
+        const [c1, c2] = [project(t, seg.c1), project(t, seg.c2)];
+        let last = prev;
+        for (let i = 1; i <= 12; i++) {
+          const u = i / 12;
+          const v = 1 - u;
+          const q: [number, number] = [
+            v * v * v * prev[0] + 3 * v * v * u * c1[0] + 3 * v * u * u * c2[0] + u * u * u * p[0],
+            v * v * v * prev[1] + 3 * v * v * u * c1[1] + 3 * v * u * u * c2[1] + u * u * u * p[1],
+          ];
+          obstacles.push([last, q, pad, owner]);
+          last = q;
+        }
+      } else if (prev && seg.op !== 'M') obstacles.push([prev, p, pad, owner]);
       prev = p;
     }
   }
+  const alternativeGroups = options.alternativeGroups ?? new Set<string>();
   const texts = items.flatMap((item, i) => (item.kind === 'text' ? [{ item, i }] : []));
-  texts.sort((a, b) => b.item.priority - a.item.priority || a.i - b.i);
-  const kept: Bounds[] = [];
+  // The labels that are always on (loads, reactions) go first, so which result is on show never
+  // changes them; each result's numbers then find room around them.
+  const late = (label: SceneText) => (alternativeGroups.has(label.group) ? 1 : 0);
+  texts.sort((a, b) => late(a.item) - late(b.item) || b.item.priority - a.item.priority || a.i - b.i);
+  const kept: { box: Bounds; group: string }[] = [];
   const result = new Map<SceneText, SceneText>();
   const vp = options.viewport;
+  const competes = (a: string, b: string) => a === b || !alternativeGroups.has(a) || !alternativeGroups.has(b);
   const fits = (item: SceneText): Bounds | null => {
     const box = textBounds(item, t, options.fontSize);
     if (vp && (box.minX < 0 || box.minY < 0 || box.maxX > vp.width || box.maxY > vp.height)) return null;
-    if (kept.some((k) => overlaps(k, box, 1))) return null;
+    if (kept.some((k) => competes(k.group, item.group) && overlaps(k.box, box, 1))) return null;
     // Against the lines, in the text's own frame so a label turned along a bar is tested as drawn;
     // a little inside its box, which the glyphs do not fill.
     const [ax, ay] = project(t, item.at);
@@ -473,14 +521,18 @@ export const placeLabels = (
       (x - ax) * c - (y - ay) * s,
       (x - ax) * s + (y - ay) * c,
     ];
-    const own = textBox(item.text, item.size ?? options.fontSize, item.align, item.baseline);
-    const hit = obstacles.some(([p, q, pad]) =>
-      segmentHitsBox(local(p), local(q), {
-        minX: own.x0 - pad + 1,
-        maxX: own.x1 + pad - 1,
-        minY: own.y0 - pad + 2,
-        maxY: own.y1 + pad - 2,
-      })
+    const own = textBox(item.text, item.size ?? options.fontSize, item.align, item.baseline, item.sub);
+    const blocks = (owner: string | null) =>
+      owner === null || (owner !== item.group && !alternativeGroups.has(item.group));
+    const hit = obstacles.some(
+      ([p, q, pad, owner]) =>
+        blocks(owner) &&
+        segmentHitsBox(local(p), local(q), {
+          minX: own.x0 - pad + 1,
+          maxX: own.x1 + pad - 1,
+          minY: own.y0 - pad + 2,
+          maxY: own.y1 + pad - 2,
+        })
     );
     return hit ? null : box;
   };
@@ -489,7 +541,7 @@ export const placeLabels = (
     for (const variant of [item, ...(item.alternatives ?? []).map((alt) => ({ ...item, ...alt }))]) {
       const box = fits(variant);
       if (!box) continue;
-      kept.push(box);
+      kept.push({ box, group: item.group });
       result.set(item, variant);
       break;
     }
@@ -541,6 +593,7 @@ export const resolveScene = (items: readonly SceneItem[], t: Transform, options:
         x: Math.round(x * 100) / 100,
         y: Math.round((y + BASELINE_SHIFT[placed.baseline] * (placed.size ?? options.fontSize)) * 100) / 100,
         text: placed.text,
+        sub: item.sub,
         size: placed.size,
         tone: item.tone,
         anchor: placed.align,

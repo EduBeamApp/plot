@@ -2,7 +2,7 @@
  * The drawing of a whole structure as scene items, in the hand of the EduBeam website's figures
  * (HeroFigure, BuildSteps): ink members with round caps, outlined supports, orange loads, purple
  * reactions clear of the supports, diagrams as an outline with ordinates across the member, and
- * numbers only where a reader looks for them - extremes and corners.
+ * numbers where a reader looks for them - member ends, steps, extremes and corners.
  *
  * Sign rules follow the EduBeam app: N and V positive away from the member's local +z side, M on
  * the tension side, so a sagging moment hangs below a beam drawn left to right.
@@ -23,7 +23,6 @@ import {
 import {
   evalPiece,
   evalPieceSlope,
-  extremes,
   innerBreaks,
   maxAbs,
   pieceDegree,
@@ -47,7 +46,14 @@ import {
   type TextPlacement,
   type Tone,
 } from './scene';
-import { glyphReach, groundDirection, memberDirections, supportGlyph, supportPlacement } from './supports';
+import {
+  glyphReach,
+  groundDirection,
+  memberDirections,
+  supportGlyph,
+  supportPlacement,
+  type GlyphPart,
+} from './supports';
 import { formatNumber, formatQuantity, type Unit, type Units } from './units';
 
 /** What the caller switches on and off. Results are named by their symbol. */
@@ -79,6 +85,15 @@ export const PLOT_LAYERS: readonly PlotLayer[] = [
   'nodeLabels',
 ];
 
+export interface TemperatureSymbols {
+  /** The uniform change, along the axis */
+  readonly uniform: string;
+  /** The difference across the depth, bottom minus top */
+  readonly gradient: string;
+}
+
+export const DEFAULT_TEMPERATURE_SYMBOLS: TemperatureSymbols = { uniform: 'ΔT', gradient: 'ΔTb − ΔTt' };
+
 export const RESULT_LAYERS = ['N', 'V', 'M', 'w'] as const satisfies readonly PlotLayer[];
 export type ResultLayer = (typeof RESULT_LAYERS)[number];
 
@@ -89,6 +104,8 @@ export interface StructureSceneOptions {
   readonly compact: boolean;
   readonly units: Units;
   readonly numberFormat?: Intl.NumberFormat;
+  /** The temperature load's symbols, which apps write differently: the Czech EduBeam has ΔTs and ΔTd − ΔTh. */
+  readonly temperatureSymbols?: TemperatureSymbols;
   /** Current scale in px per metre: spaces ordinates and load arrows evenly on screen. */
   readonly scale: number;
   /** Largest diagram ordinate, px. */
@@ -103,9 +120,17 @@ export interface StructureSceneOptions {
   readonly fontSize?: number;
   /** Values upright (`horizontal`) or turned to run along their ordinate (`axis`), as in the app. */
   readonly resultLabelMode?: ResultLabelMode;
+  /**
+   * `values` (the default) draws each reaction the way it acts, with its size. `names` draws the
+   * unknowns of an exercise instead: an arrow for every restrained direction, pointing the way it
+   * counts as positive (along the node's x, up, counter-clockwise), named `A` with subscript `x`,
+   * `z`, or `M` with subscript `A`. It needs no results.
+   */
+  readonly reactionLabels?: ReactionLabels;
 }
 
 export type ResultLabelMode = 'axis' | 'horizontal';
+export type ReactionLabels = 'values' | 'names';
 
 /** Ordinates are this far apart on screen, as in the app and the website's figures. */
 export const HATCH_SPACING_PX = 7;
@@ -227,6 +252,8 @@ const arrow = (
       tone,
       width: 0,
       fill: 'tone',
+      // The head is as much in the way of a label as the shaft
+      obstacle: style.obstacle,
       segments: [
         { op: 'M', p: shift(origin, tip.x, tip.y) },
         { op: 'L', p: shift(origin, base.x - d.y * half, base.y + d.x * half) },
@@ -317,23 +344,6 @@ const rankedDirections = (used: readonly Vec[], preferred: Vec): Vec[] =>
     .sort((a, b) => b.score - a.score)
     .map(({ c }) => c);
 
-/** Of the eight compass directions, the one farthest from every direction already in use. */
-const freeDirection = (used: readonly Vec[], preferred: Vec): Vec => {
-  let best = preferred;
-  let bestScore = -Infinity;
-  for (let i = 0; i < 8; i++) {
-    const a = (i * Math.PI) / 4 - Math.PI / 4;
-    const c = { x: Math.cos(a), y: Math.sin(a) };
-    const clearance = Math.min(2, ...used.map((u) => 1 - (c.x * u.x + c.y * u.y)));
-    const score = clearance + 0.01 * (c.x * preferred.x + c.y * preferred.y);
-    if (score > bestScore) {
-      bestScore = score;
-      best = c;
-    }
-  }
-  return best;
-};
-
 /** Unit vector from the node away from the members meeting it; `fallback` when they cancel. */
 const awayFrom = (model: PlotModel, node: PlotNode, fallback: Vec): Vec => {
   const m = memberDirections(model, node);
@@ -350,23 +360,46 @@ const frameOf = (frames: ReadonlyMap<string, MemberFrame>, id: string): MemberFr
 
 /* ── Structure: members, hinges, supports, nodes, dimensions ─────────────────────────────── */
 
+/** The dashed line beside a member that marks its bottom fibres, the local +z side, as in the app. */
+const FIBRE_WIDTH = 1;
+const FIBRE_DASH = '5 4';
+const FIBRE_GAP = 2.5;
+
 const memberItems = (model: PlotModel, frames: ReadonlyMap<string, MemberFrame>, size: Sizes): SceneItem[] =>
-  model.members.map((m, i): SceneItem => {
+  model.members.flatMap((m, i): SceneItem[] => {
     const f = frameOf(frames, m.id);
-    return {
-      kind: 'path',
-      group: 'members',
-      layer: LAYERS.member,
-      tone: 'ink',
-      width: size.member,
-      cap: 'round',
-      obstacle: true,
-      draw: i,
-      segments: [
-        { op: 'M', p: at(f, 0) },
-        { op: 'L', p: at(f, f.length) },
-      ],
-    };
+    // Just clear of the member's stroke, on screen px: the same at every zoom, like the app's
+    const off = size.member / 2 + FIBRE_GAP;
+    return [
+      {
+        kind: 'path',
+        group: 'members',
+        layer: LAYERS.member,
+        tone: 'ink',
+        width: size.member,
+        cap: 'round',
+        obstacle: true,
+        draw: i,
+        segments: [
+          { op: 'M', p: at(f, 0) },
+          { op: 'L', p: at(f, f.length) },
+        ],
+      },
+      {
+        kind: 'path',
+        group: 'members',
+        layer: LAYERS.member,
+        tone: 'muted',
+        width: FIBRE_WIDTH,
+        dash: FIBRE_DASH,
+        cap: 'butt',
+        fitIgnore: true,
+        segments: [
+          { op: 'M', p: at(f, 0, f.nx * off, f.nz * off) },
+          { op: 'L', p: at(f, f.length, f.nx * off, f.nz * off) },
+        ],
+      },
+    ];
   });
 
 /**
@@ -406,6 +439,12 @@ const hingeItems = (model: PlotModel, frames: ReadonlyMap<string, MemberFrame>, 
   return items;
 };
 
+/**
+ * A support's line widths on screen, px: the EduBeam app's, the same at every size and on every
+ * figure, so a support looks alike in the app, on a page and in a thumbnail.
+ */
+const SUPPORT_WIDTH = { regular: 1.8, bold: 2.4, thin: 1.2 } as const satisfies Record<GlyphPart['weight'], number>;
+
 const supportItems = (model: PlotModel, connected: ReadonlySet<string>): SceneItem[] => {
   const items: SceneItem[] = [];
   for (const node of model.nodes) {
@@ -421,7 +460,7 @@ const supportItems = (model: PlotModel, connected: ReadonlySet<string>): SceneIt
         group: 'supports',
         layer: LAYERS.support,
         tone: 'ink',
-        width: part.weight === 'bold' ? 2.25 : part.weight === 'regular' ? 1.6 : 1,
+        width: SUPPORT_WIDTH[part.weight],
         fill: part.fill,
         cap: 'round',
         segments: [
@@ -458,9 +497,12 @@ const nodeItems = (model: PlotModel, connected: ReadonlySet<string>, layers: Rea
         { x: -away.x, y: -away.y },
         { x: 0, y: 1 },
       ];
-      const [first, ...rest] = rankedDirections(used, { x: -0.7, y: -0.7 }).map((dir) =>
-        placeText(anchor(node.x, node.z), dir, 9)
-      );
+      // Every free direction close in, then the same again further out, clear of an arc round the node
+      const dirs = rankedDirections(used, { x: -0.7, y: -0.7 });
+      // A moment arc round the node (a fixing moment, a nodal moment) would enclose a label close in
+      const arcs = node.fixity.ry || model.loads.some((l) => l.kind === 'nodalMoment' && l.node === node.id);
+      const rings = arcs ? [24, 32] : [9, 22];
+      const [first, ...rest] = rings.flatMap((gap) => dirs.map((dir) => placeText(anchor(node.x, node.z), dir, gap)));
       items.push({
         kind: 'text',
         group: 'nodeLabels',
@@ -470,7 +512,7 @@ const nodeItems = (model: PlotModel, connected: ReadonlySet<string>, layers: Rea
         priority: 9,
         weight: 600,
         ...first,
-        alternatives: rest.slice(0, 5),
+        alternatives: rest,
       });
     }
   }
@@ -478,16 +520,34 @@ const nodeItems = (model: PlotModel, connected: ReadonlySet<string>, layers: Rea
 };
 
 /** Overall width under the structure and height to its right, as BuildSteps draws them. */
+/** Distinct values, sorted: positions closer than a micrometre are one. */
+const distinct = (values: readonly number[]): number[] =>
+  [...values].sort((a, b) => a - b).filter((v, i, all) => i === 0 || v - all[i - 1] > 1e-6);
+
+/** A dimension is part of the question: without it an exercise cannot be solved, so it is never left out */
+const DIMENSION_PRIORITY = 11;
+
+/**
+ * Chain dimensions, as an exercise sheet gives them: below the structure, one per span between the
+ * nodes and point loads along x; to its right, one per storey between the node levels. With more
+ * than one link, the overall size follows on a second line.
+ */
 const dimensionItems = (
   model: PlotModel,
+  frames: ReadonlyMap<string, MemberFrame>,
   options: StructureSceneOptions,
   fmt: (v: number, u: Unit) => string
 ): SceneItem[] => {
-  const xs = model.nodes.map((n) => n.x);
-  const zs = model.nodes.map((n) => n.z);
-  const [x0, x1, z0, z1] = [Math.min(...xs), Math.max(...xs), Math.min(...zs), Math.max(...zs)];
+  const loadXs = model.loads.flatMap((l) => {
+    if (l.kind !== 'pointForce' && l.kind !== 'pointMoment') return [];
+    const f = frames.get(l.member);
+    return f ? [pointAlong(f, l.at).x] : [];
+  });
+  const xs = distinct([...model.nodes.map((n) => n.x), ...loadXs]);
+  const zs = distinct(model.nodes.map((n) => n.z));
+  const [x0, x1, z0, z1] = [xs[0], xs[xs.length - 1], zs[0], zs[zs.length - 1]];
   const items: SceneItem[] = [];
-  const line = (a: Anchor, b: Anchor): SceneItem => ({
+  const line = (a: Anchor, b: Anchor): ScenePath => ({
     kind: 'path',
     group: 'dimensions',
     layer: LAYERS.member,
@@ -498,38 +558,65 @@ const dimensionItems = (
       { op: 'L', p: b },
     ],
   });
-  // Clear of the reactions when both are in the layout.
+  const length = (v: number) => fmt(v, options.units.length);
+  // Clear of the reactions when both are in the layout; a second line 28 px further out.
   const below = options.layers.has('reactions') ? 92 : 52;
   const right = options.layers.has('reactions') ? 104 : 58;
-  if (x1 - x0 > 1e-9) {
-    items.push(line(anchor(x0, z1, 0, below), anchor(x1, z1, 0, below)));
-    for (const x of [x0, x1]) items.push(line(anchor(x, z1, 0, below - 8), anchor(x, z1, 0, below + 8)));
-    items.push({
-      ...text(
-        'dimensions',
-        anchor((x0 + x1) / 2, z1, 0, below),
-        { x: 0, y: -1 },
-        5,
-        fmt(x1 - x0, options.units.length),
-        'muted',
-        9
-      ),
+  const ROW = 28;
+
+  // The oblique stroke of a technical drawing where each extension line crosses the dimension line
+  const TICK = 4;
+  const tick = (a: Anchor): ScenePath => ({
+    ...line(shift(a, -TICK, TICK), shift(a, TICK, -TICK)),
+    width: 1.5,
+  });
+
+  const horizontal = (stops: readonly number[], dy: number) => {
+    items.push(line(anchor(stops[0], z1, 0, dy), anchor(stops[stops.length - 1], z1, 0, dy)));
+    for (const x of stops)
+      items.push(line(anchor(x, z1, 0, dy - 6), anchor(x, z1, 0, dy + 6)), tick(anchor(x, z1, 0, dy)));
+    stops.slice(1).forEach((x, i) => {
+      const a = stops[i];
+      items.push(
+        text(
+          'dimensions',
+          anchor((a + x) / 2, z1, 0, dy),
+          { x: 0, y: -1 },
+          4,
+          length(x - a),
+          'muted',
+          DIMENSION_PRIORITY
+        )
+      );
     });
+  };
+  const vertical = (stops: readonly number[], dx: number) => {
+    items.push(line(anchor(x1, stops[0], dx, 0), anchor(x1, stops[stops.length - 1], dx, 0)));
+    for (const z of stops)
+      items.push(line(anchor(x1, z, dx - 6, 0), anchor(x1, z, dx + 6, 0)), tick(anchor(x1, z, dx, 0)));
+    stops.slice(1).forEach((z, i) => {
+      const a = stops[i];
+      items.push(
+        text(
+          'dimensions',
+          anchor(x1, (a + z) / 2, dx, 0),
+          { x: 1, y: 0 },
+          6,
+          length(z - a),
+          'muted',
+          DIMENSION_PRIORITY
+        )
+      );
+    });
+  };
+
+  if (x1 - x0 > 1e-9) {
+    horizontal(xs, below);
+    if (xs.length > 2) horizontal([x0, x1], below + ROW);
   }
   if (z1 - z0 > 1e-9) {
-    items.push(line(anchor(x1, z0, right, 0), anchor(x1, z1, right, 0)));
-    for (const z of [z0, z1]) items.push(line(anchor(x1, z, right - 8, 0), anchor(x1, z, right + 8, 0)));
-    items.push(
-      text(
-        'dimensions',
-        anchor(x1, (z0 + z1) / 2, right, 0),
-        { x: 1, y: 0 },
-        8,
-        fmt(z1 - z0, options.units.length),
-        'muted',
-        9
-      )
-    );
+    vertical(zs, right);
+    if (zs.length > 2) vertical([z0, z1], right + 2 * ROW);
   }
   return items;
 };
@@ -642,10 +729,14 @@ const distributedItems = (
         [0, v0, forwardStart],
         [f.length, v1, forwardEnd],
       ] as const);
+  const over = (x: number, v: number, align: TextAlign) => {
+    const placed = placeText(tail(x, v), Math.sign(v) >= 0 ? out : { x: -out.x, y: -out.y }, 6);
+    return { ...placed, align: placed.baseline === 'middle' ? placed.align : align };
+  };
   for (const [x, v, inward] of labelled ? ends : []) {
     if (Math.abs(v) < 1e-9 * vmax) continue;
-    const placed = placeText(tail(x, v), Math.sign(v) >= 0 ? out : { x: -out.x, y: -out.y }, 6);
-    // Over the end of the band, reading inward (BuildSteps writes q over the beam's left end).
+    // Over the end of the band, reading inward (BuildSteps writes q over the beam's left end); a
+    // uniform load may move to the middle or the other end when a diagram stands there.
     items.push({
       kind: 'text',
       group: 'loads',
@@ -653,17 +744,43 @@ const distributedItems = (
       text: value(v),
       tone: 'load',
       priority: LOAD_PRIORITY,
-      ...placed,
-      align: placed.baseline === 'middle' ? placed.align : inward,
+      ...over(x, v, inward),
+      // On an inclined member the band runs up or down beside the text: either alignment at either end
+      alternatives: uniform
+        ? [
+            over(f.length / 2, v, 'middle'),
+            over(f.length, v, forwardEnd),
+            over(0, v, forwardEnd),
+            over(f.length, v, forwardStart),
+          ]
+        : [],
     });
   }
   return items;
 };
 
-const pointForceItems = (origin: Anchor, force: Vec, content: string, size: Sizes, gap: number): SceneItem[] => {
+const pointForceItems = (
+  origin: Anchor,
+  force: Vec,
+  content: string,
+  size: Sizes,
+  gap: number,
+  pull = false
+): SceneItem[] => {
   const d = unit(force.x, force.y);
-  const tip = { x: -d.x * gap, y: -d.y * gap };
-  const tail = { x: -d.x * (gap + size.pointArrow), y: -d.y * (gap + size.pointArrow) };
+  // Pushing: the arrow comes in towards the point. Pulling: it hangs off the point, pointing away.
+  const near = pull ? gap : -gap;
+  const far = pull ? gap + size.pointArrow : -(gap + size.pointArrow);
+  const [tip, tail] = pull
+    ? [
+        { x: d.x * far, y: d.y * far },
+        { x: d.x * near, y: d.y * near },
+      ]
+    : [
+        { x: d.x * near, y: d.y * near },
+        { x: d.x * far, y: d.y * far },
+      ];
+  const end = pull ? tip : tail;
   return [
     ...arrow('loads', origin, tail, tip, 'load', LAYERS.load, {
       width: size.pointShaft,
@@ -672,17 +789,46 @@ const pointForceItems = (origin: Anchor, force: Vec, content: string, size: Size
       obstacle: true,
     }),
     {
-      ...text('loads', shift(origin, tail.x, tail.y), { x: -d.x, y: -d.y }, 5, content, 'load', LOAD_PRIORITY),
+      ...text('loads', shift(origin, end.x, end.y), pull ? d : { x: -d.x, y: -d.y }, 5, content, 'load', LOAD_PRIORITY),
       weight: 600,
     },
   ];
 };
 
-const pointMomentItems = (origin: Anchor, my: number, gap: Vec, content: string, size: Sizes): SceneItem[] => {
-  const dir = freeDirection([gap], { x: 0.7, y: -0.7 });
+/** Whether a member leaves the node along `dir`, where an arrow drawn that way would lie on it. */
+const memberAlong = (model: PlotModel, frames: ReadonlyMap<string, MemberFrame>, node: PlotNode, dir: Vec): boolean =>
+  model.members.some((m) => {
+    if (m.start !== node.id && m.end !== node.id) return false;
+    const f = frames.get(m.id);
+    if (!f) return false;
+    const sign = m.start === node.id ? 1 : -1;
+    return sign * (f.tx * dir.x + f.tz * dir.y) > 0.97;
+  });
+
+const pointMomentItems = (
+  origin: Anchor,
+  my: number,
+  gap: Vec,
+  content: string,
+  size: Sizes,
+  avoid: readonly Vec[] = []
+): SceneItem[] => {
+  // Off the arc, the freest direction first; the others in reserve for when a label stands there
+  const [first, ...rest] = rankedDirections([gap, ...avoid], { x: 0.7, y: -0.7 }).map((dir) =>
+    placeText(shift(origin, dir.x * size.arc, dir.y * size.arc), dir, 4)
+  );
   return [
     ...momentArc('loads', origin, size.arc, my > 0, gap, 'load', LAYERS.load),
-    text('loads', shift(origin, dir.x * size.arc, dir.y * size.arc), dir, 4, content, 'load', LOAD_PRIORITY),
+    {
+      kind: 'text',
+      group: 'loads',
+      layer: LAYERS.label,
+      text: content,
+      tone: 'load',
+      priority: LOAD_PRIORITY,
+      ...first,
+      alternatives: rest,
+    },
   ];
 };
 
@@ -690,11 +836,12 @@ const temperatureItems = (
   load: Extract<PlotLoad, { kind: 'temperature' }>,
   f: MemberFrame,
   units: Units,
-  fmt: (v: number, u: Unit) => string
+  fmt: (v: number, u: Unit) => string,
+  symbols: TemperatureSymbols
 ): SceneItem[] => {
   const parts: string[] = [];
-  if (load.uniform !== 0) parts.push(`ΔT = ${fmt(load.uniform, units.temperature)}`);
-  if (load.gradient !== 0) parts.push(`ΔTb − ΔTt = ${fmt(load.gradient, units.temperature)}`);
+  if (load.uniform !== 0) parts.push(`${symbols.uniform} = ${fmt(load.uniform, units.temperature)}`);
+  if (load.gradient !== 0) parts.push(`${symbols.gradient} = ${fmt(load.gradient, units.temperature)}`);
   if (parts.length === 0) return [];
   let angle = (Math.atan2(f.tz, f.tx) * 180) / Math.PI;
   if (angle > 90) angle -= 180;
@@ -764,32 +911,41 @@ const prescribedItems = (
         headWidth: 7,
         dash: '4 3',
       }),
-      text(
-        'loads',
-        shift(origin, tip.x, tip.y),
-        d,
-        4,
-        fmt(Math.hypot(dx, dz), units.displacement),
-        'load',
-        LOAD_PRIORITY
-      )
+      {
+        ...text(
+          'loads',
+          shift(origin, tip.x, tip.y),
+          d,
+          4,
+          fmt(Math.hypot(dx, dz), units.displacement),
+          'load',
+          LOAD_PRIORITY
+        ),
+        // Past the arrow's head, else beside its middle on the side away from the node, else at its tail
+        alternatives: [
+          placeText(shift(origin, o.x + d.x * 4, o.y + d.y * 4), { x: perp.x * side, y: perp.y * side }, 6),
+          placeText(shift(origin, o.x - d.x * 12, o.y - d.y * 12), { x: -d.x, y: -d.y }, 4),
+        ],
+      }
     );
   }
   if (load.ry) {
     const gap = { x: -away.x, y: -away.y };
     items.push(...momentArc('loads', origin, size.arc + 6, load.ry > 0, gap, 'load', LAYERS.load, '4 3'));
-    const t = freeDirection([gap], { x: 0.7, y: -0.7 });
-    items.push(
-      text(
-        'loads',
-        shift(origin, t.x * (size.arc + 6), t.y * (size.arc + 6)),
-        t,
-        4,
-        fmt(Math.abs(load.ry), units.rotation),
-        'load',
-        LOAD_PRIORITY
-      )
+    const r = size.arc + 6;
+    const [first, ...rest] = rankedDirections([gap], { x: 0.7, y: -0.7 }).map((dir) =>
+      placeText(shift(origin, dir.x * r, dir.y * r), dir, 4)
     );
+    items.push({
+      kind: 'text',
+      group: 'loads',
+      layer: LAYERS.label,
+      text: fmt(Math.abs(load.ry), units.rotation),
+      tone: 'load',
+      priority: LOAD_PRIORITY,
+      ...first,
+      alternatives: rest,
+    });
   }
   return items;
 };
@@ -840,7 +996,12 @@ const loadItems = (
         const node = nodes.get(load.node);
         if (node) {
           const content = fmt(Math.hypot(load.fx, load.fz), units.force);
-          items.push(...pointForceItems(anchor(node.x, node.z), { x: load.fx, y: load.fz }, content, size, gap + 1));
+          // A load at a truss's bottom chord pushes down along the vertical above it: hang it below instead
+          const d = unit(load.fx, load.fz);
+          const pull = memberAlong(model, frames, node, { x: -d.x, y: -d.y }) && !memberAlong(model, frames, node, d);
+          items.push(
+            ...pointForceItems(anchor(node.x, node.z), { x: load.fx, y: load.fz }, content, size, gap + 1, pull)
+          );
         }
         break;
       }
@@ -849,7 +1010,12 @@ const loadItems = (
         if (node) {
           const away = awayFrom(model, node, { x: 0, y: 1 });
           const content = fmt(Math.abs(load.my), units.moment);
-          items.push(...pointMomentItems(anchor(node.x, node.z), load.my, { x: -away.x, y: -away.y }, content, size));
+          // Clear of the members at the node, and of the node's own label diagonally up-left
+          items.push(
+            ...pointMomentItems(anchor(node.x, node.z), load.my, { x: -away.x, y: -away.y }, content, size, [
+              { x: -0.7, y: -0.7 },
+            ])
+          );
         }
         break;
       }
@@ -878,7 +1044,10 @@ const loadItems = (
       }
       case 'temperature': {
         const f = frames.get(load.member);
-        if (f) items.push(...temperatureItems(load, f, units, fmt));
+        if (f)
+          items.push(
+            ...temperatureItems(load, f, units, fmt, options.temperatureSymbols ?? DEFAULT_TEMPERATURE_SYMBOLS)
+          );
         break;
       }
       case 'prescribed': {
@@ -894,24 +1063,55 @@ const loadItems = (
 /* ── Reactions ──────────────────────────────────────────────────────────────────────────────── */
 
 const REACTION_PRIORITY = 5;
+/** An exercise's unknowns before the node labels (9): a question with a name missing is unanswerable */
+const NAME_PRIORITY = 10;
 
 /**
  * Reactions as forces on the structure, clear of the support as BuildSteps draws them. One along
  * the support's ground direction stands beyond the symbol, pointing at it when it pushes; one
  * across it lies just under the symbol's base, on the side it pushes from.
  */
+/**
+ * The reactions of an exercise, before it is solved: one for every restrained direction, with a
+ * unit value pointing the way it counts as positive. Along the node's x to the right, along its z
+ * upward (z points down, so −1), counter-clockwise for a fixing moment.
+ */
+const unknownReactions = (model: PlotModel): PlotReaction[] =>
+  model.nodes.flatMap((n) => [
+    ...(n.fixity.dx ? [{ node: n.id, dof: 'dx' as const, value: 1 }] : []),
+    ...(n.fixity.dz ? [{ node: n.id, dof: 'dz' as const, value: -1 }] : []),
+    ...(n.fixity.ry ? [{ node: n.id, dof: 'ry' as const, value: 1 }] : []),
+  ]);
+
 const reactionItems = (
   model: PlotModel,
   reactions: readonly PlotReaction[],
   options: StructureSceneOptions,
-  size: Sizes,
-  fmt: (v: number, u: Unit) => string
+  size: Sizes
 ): SceneItem[] => {
   const items: SceneItem[] = [];
   const nodes = nodeMap(model);
   const byNode = new Map<string, PlotReaction[]>();
   for (const r of reactions) if (r.value !== 0) byNode.set(r.node, [...(byNode.get(r.node) ?? []), r]);
   const style = { width: 1.75, head: 9, headWidth: 9, obstacle: true };
+  const names = options.reactionLabels === 'names';
+  const priority = names ? NAME_PRIORITY : REACTION_PRIORITY;
+  // A result, so a bare number like the diagrams' values; only given quantities carry units. Or,
+  // for an exercise, the unknown's name.
+  // Names are variables, so italic, as a textbook sets them
+  // Names are what the exercise asks for: a size up and semi-bold, so they read before the loads
+  const nameStyle = { italic: true, weight: 600, size: Math.round((options.fontSize ?? 13) * 1.15) };
+  const label = (r: PlotReaction): { text: string; sub?: string; italic?: boolean; weight?: number; size?: number } =>
+    names
+      ? r.dof === 'ry'
+        ? { text: 'M', sub: r.node, ...nameStyle }
+        : { text: r.node, sub: r.dof === 'dx' ? 'x' : 'z', ...nameStyle }
+      : {
+          text: formatNumber(
+            Math.abs(r.value) * (r.dof === 'ry' ? options.units.moment : options.units.force).scale,
+            options.numberFormat
+          ),
+        };
 
   for (const [id, list] of byNode) {
     const node = nodes.get(id);
@@ -936,7 +1136,7 @@ const reactionItems = (
       const axis = r.dof === 'dx' ? { x: c, y: s } : { x: -s, y: c };
       const f = { x: axis.x * r.value, y: axis.y * r.value };
       const fd = unit(f.x, f.y);
-      const value = fmt(Math.abs(r.value), options.units.force);
+      const value = label(r);
       if (Math.abs(axis.x * g.x + axis.y * g.y) > 0.7) {
         const near = Math.max(reach + size.reactionGap, clear);
         const far = near + size.reaction;
@@ -959,7 +1159,8 @@ const reactionItems = (
         const labelAt = shift(origin, pFar.x - g.x * 6, pFar.y - g.y * 6);
         // Beside it on the other side when the first is taken or off the edge (a right-hand support).
         items.push({
-          ...text('reactions', labelAt, side, 7, value, 'reaction', REACTION_PRIORITY),
+          ...text('reactions', labelAt, side, 7, value.text, 'reaction', priority),
+          ...value,
           alternatives: [placeText(labelAt, { x: -side.x, y: -side.y }, 7)],
         });
         used.push(g);
@@ -974,17 +1175,17 @@ const reactionItems = (
         };
         const tip = { x: o.x + across.x * from * 14, y: o.y + across.y * from * 14 };
         items.push(...arrow('reactions', origin, tail, tip, 'reaction', LAYERS.reaction, style));
-        items.push(
-          text(
-            'reactions',
-            shift(origin, tail.x, tail.y),
-            unit(tail.x - tip.x, tail.y - tip.y),
-            4,
-            value,
-            'reaction',
-            REACTION_PRIORITY
-          )
-        );
+        const out = unit(tail.x - tip.x, tail.y - tip.y);
+        const mid = { x: (tail.x + tip.x) / 2, y: (tail.y + tip.y) / 2 };
+        items.push({
+          ...text('reactions', shift(origin, tail.x, tail.y), out, 4, value.text, 'reaction', priority),
+          ...value,
+          // Under the arrow, then over it, when the diagram or another value stands past its tail
+          alternatives: [
+            placeText(shift(origin, mid.x, mid.y), g, 5),
+            placeText(shift(origin, mid.x, mid.y), { x: -g.x, y: -g.y }, 5),
+          ],
+        });
         used.push({ x: across.x * from, y: across.y * from });
       }
     }
@@ -996,18 +1197,29 @@ const reactionItems = (
       items.push(
         ...momentArc('reactions', origin, arcR, moment.value > 0, gap, 'reaction', LAYERS.reaction, undefined, 190)
       );
-      const t = freeDirection(used, { x: 0.7, y: -0.7 });
-      items.push(
-        text(
-          'reactions',
-          shift(origin, t.x * arcR, t.y * arcR),
-          t,
-          5,
-          fmt(Math.abs(moment.value), options.units.moment),
-          'reaction',
-          REACTION_PRIORITY
-        )
-      );
+      // Off the arc, in the first free direction that also keeps clear of the members at the node
+      const along = memberDirections(model, node);
+      // First choice: out beside the arc, away from a beam and its loads (left of a wall on the
+      // left), the node's own label being above it; at a column's foot, up and to the right
+      const beam = along.count > 0 && Math.abs(along.x) > Math.abs(along.z);
+      // A name goes up and away (its horizontal arrow comes in beside the arc), ahead of the node's
+      // own label, which then finds another place
+      const preferred = beam ? (names ? unit(-along.x, -1) : unit(-along.x, -0.2)) : { x: 0.7, y: -0.7 };
+      const ranked = rankedDirections(along.count > 0 ? [...used, unit(along.x, along.z)] : used, preferred);
+      // Beside a wall the first choice is tried first, even when a reaction's arrow comes from that
+      // side below it: the collision checks still move the label if it is taken
+      const dirs = beam ? [preferred, ...ranked] : ranked;
+      const [first, ...rest] = dirs.map((dir) => placeText(shift(origin, dir.x * arcR, dir.y * arcR), dir, 5));
+      items.push({
+        kind: 'text',
+        group: 'reactions',
+        layer: LAYERS.label,
+        ...label(moment),
+        tone: 'reaction',
+        priority,
+        ...first,
+        alternatives: rest,
+      });
     }
   }
   return items;
@@ -1066,7 +1278,9 @@ const diagramShape = (
     hatch.push({ op: 'M', p: at(f, x) }, { op: 'L', p: at(f, x, normal.x * k * v, normal.y * k * v) });
   }
 
-  const items: SceneItem[] = [{ kind: 'path', group, layer: LAYERS.diagramLine, tone, width: 1.75, segments: outline }];
+  const items: SceneItem[] = [
+    { kind: 'path', group, layer: LAYERS.diagramLine, tone, width: 1.75, segments: outline, shield: true },
+  ];
   if (hatch.length > 0) {
     items.push({
       kind: 'path',
@@ -1132,8 +1346,8 @@ export const tipPlacements = (tip: Anchor, out: Vec, mode: ResultLabelMode, gaps
 /**
  * The numbers on one diagram: every value at the tip of its own ordinate. A rigid corner is
  * written once, at the tip of the member with more room around it (the other's tip in reserve); a
- * step shows both its values; an interior extreme carries the unit; a member end is written where
- * it is that member's largest or smallest value, or where members meet.
+ * step shows both its values; every non-zero member end and interior extreme is written, as a
+ * textbook labels a diagram. Diagram values carry no unit (the reader knows it from the result).
  */
 const diagramLabels = (
   model: PlotModel,
@@ -1160,6 +1374,8 @@ const diagramLabels = (
     pw.every((p) => (pieceDegree(p) ?? 0) === 0 && close(evalPiece(p, p.x0), evalPiece(pw[0], pw[0].x0)));
 
   const push = (places: readonly TextPlacement[], content: string, v: number, members: string[]) => {
+    // A value that rounds to nothing in the chosen format (solver noise at a free end) is not written
+    if (!/[1-9]/.test(content)) return;
     const [first, ...rest] = places;
     candidates.push({
       item: {
@@ -1189,8 +1405,6 @@ const diagramLabels = (
       const v = valueAt(pw, x, end === 0 ? 'right' : 'left');
       if (Math.abs(v) <= zero) return [];
       const n = normalOf(f);
-      const e = extremes(pw);
-      const extreme = !!e && (close(v, e.max.value) || close(v, e.min.value));
       // The member leaves the node this way.
       const away = end === 0 ? { x: f.tx, y: f.tz } : { x: -f.tx, y: -f.tz };
       return [
@@ -1198,7 +1412,6 @@ const diagramLabels = (
           m,
           f,
           v,
-          extreme,
           away,
           out: { x: n.x * Math.sign(v), y: n.y * Math.sign(v) },
           tip: at(f, x, n.x * k * v, n.y * k * v),
@@ -1207,7 +1420,9 @@ const diagramLabels = (
     });
     if (ends.length === 0) continue;
 
-    if (ends.length >= 2 && ends.every((e) => close(Math.abs(e.v), Math.abs(ends[0].v)))) {
+    // A moment is continuous round a rigid joint: one value, written once. A shear or normal force of
+    // the same size on both sides of a support is a step, and both its values are written.
+    if (q === 'M' && ends.length >= 2 && ends.every((e) => close(Math.abs(e.v), Math.abs(ends[0].v)))) {
       // One value for the joint. The ordinate that points along another member is crowded by that
       // member's own diagram; the one pointing away from every other member has the room.
       const crowding = (e: (typeof ends)[number]) =>
@@ -1223,10 +1438,7 @@ const diagramLabels = (
       );
       continue;
     }
-    for (const e of ends) {
-      if (!e.extreme && ends.length < 2) continue;
-      push(tipPlacements(e.tip, e.out, mode), number(e.v), e.v, [e.m.id]);
-    }
+    for (const e of ends) push(tipPlacements(e.tip, e.out, mode), number(e.v), e.v, [e.m.id]);
   }
 
   // Along each member.
@@ -1239,7 +1451,9 @@ const diagramLabels = (
     const outOf = (v: number) => ({ x: n.x * Math.sign(v), y: n.y * Math.sign(v) });
     if (isConstant(pw)) {
       const v = evalPiece(pw[0], pw[0].x0);
-      if (Math.abs(v) > zero) push(tipPlacements(tipAt(f.length / 2, v), outOf(v), mode), number(v), v, [m.id]);
+      // Mid-member, or a quarter of the way along either way when a load's value stands there
+      const along = [0.5, 0.25, 0.75].flatMap((t) => tipPlacements(tipAt(f.length * t, v), outOf(v), mode));
+      if (Math.abs(v) > zero) push(along, number(v), v, [m.id]);
       continue;
     }
     for (const b of innerBreaks(pw)) {
@@ -1299,7 +1513,7 @@ const continuesInto = (
 };
 
 /** Every member carries one constant normal force and no member loads: a truss, read bar by bar. */
-const isBarStructure = (model: PlotModel, results: Readonly<Record<string, MemberResults>>): boolean =>
+export const isBarStructure = (model: PlotModel, results: Readonly<Record<string, MemberResults>>): boolean =>
   !model.loads.some((l) => 'member' in l) &&
   model.members.every((m) => {
     const pw = results[m.id]?.N ?? [];
@@ -1438,18 +1652,23 @@ const deformedPath = (f: MemberFrame, r: MemberResults, k: number, width: number
   return { kind: 'path', group: 'w', layer: LAYERS.deformed, tone: 'deformed', width, cap: 'round', segments };
 };
 
-/** The largest displacement anywhere, for its one label. */
-const largestDisplacement = (
+type Displaced = { member: string; x: number; u: number; w: number; size: number };
+
+/**
+ * The largest displacement, for its label: on every member whose own peak is as large (to 0.1 %),
+ * so the two spans of a symmetric beam are both labelled, not one of them at random.
+ */
+const largestDisplacements = (
   model: PlotModel,
   frames: ReadonlyMap<string, MemberFrame>,
   results: Readonly<Record<string, MemberResults>>
-): { member: string; x: number; u: number; w: number } | null => {
-  let best: { member: string; x: number; u: number; w: number } | null = null;
-  let size = 0;
+): Displaced[] => {
+  const peaks: Displaced[] = [];
   for (const m of model.members) {
     const r = results[m.id];
     const f = frames.get(m.id);
     if (!r || !f) continue;
+    let best: Displaced | null = null;
     for (const p of r.w) {
       const xs = [
         p.x0,
@@ -1460,14 +1679,23 @@ const largestDisplacement = (
       for (const x of xs) {
         const u = valueAt(r.u, x);
         const w = valueAt(r.w, x);
-        if (Math.hypot(u, w) > size) {
-          size = Math.hypot(u, w);
-          best = { member: m.id, x, u, w };
-        }
+        const size = Math.hypot(u, w);
+        if (!best || size > best.size) best = { member: m.id, x, u, w, size };
       }
     }
+    if (best) peaks.push(best);
   }
-  return best;
+  const largest = Math.max(0, ...peaks.map((p) => p.size));
+  if (!(largest > 0)) return [];
+  // A peak at a shared node is one point: keep it once
+  const seen: { x: number; z: number }[] = [];
+  return peaks.filter((p) => {
+    if (p.size < largest * 0.999) return false;
+    const pt = pointAlong(frameOf(frames, p.member), p.x);
+    if (seen.some((o) => Math.hypot(o.x - pt.x, o.z - pt.z) < 1e-6)) return false;
+    seen.push(pt);
+    return true;
+  });
 };
 
 /* ── Putting it together ────────────────────────────────────────────────────────────────────── */
@@ -1550,8 +1778,7 @@ export const buildStructureScene = (model: PlotModel, options: StructureSceneOpt
         const r = results.members[m.id];
         if (r) items.push(deformedPath(frameOf(frames, m.id), r, k.w, size.deformed));
       }
-      const peak = largestDisplacement(model, frames, results.members);
-      if (peak) {
+      for (const peak of largestDisplacements(model, frames, results.members)) {
         const f = frameOf(frames, peak.member);
         const d = { x: peak.u * f.tx + peak.w * f.nx, y: peak.u * f.tz + peak.w * f.nz };
         const p = at(f, peak.x, k.w * d.x, k.w * d.y);
@@ -1561,7 +1788,7 @@ export const buildStructureScene = (model: PlotModel, options: StructureSceneOpt
             p,
             unit(d.x, d.y),
             5,
-            formatNumber(Math.hypot(peak.u, peak.w) * options.units.displacement.scale, options.numberFormat),
+            formatNumber(peak.size * options.units.displacement.scale, options.numberFormat),
             'deformed',
             7
           )
@@ -1573,9 +1800,12 @@ export const buildStructureScene = (model: PlotModel, options: StructureSceneOpt
   if (layers.has('members')) items.push(...memberItems(model, frames, size), ...hingeItems(model, frames, size));
   if (layers.has('supports')) items.push(...supportItems(model, connected));
   if (layers.has('nodes') || layers.has('nodeLabels')) items.push(...nodeItems(model, connected, layers));
-  if (layers.has('dimensions')) items.push(...dimensionItems(model, options, fmt));
+  if (layers.has('dimensions')) items.push(...dimensionItems(model, frames, options, fmt));
   if (layers.has('loads')) items.push(...loadItems(model, frames, options, size, fmt));
-  if (layers.has('reactions') && results) items.push(...reactionItems(model, results.reactions, options, size, fmt));
+  if (layers.has('reactions')) {
+    const reactions = options.reactionLabels === 'names' ? unknownReactions(model) : results?.reactions;
+    if (reactions) items.push(...reactionItems(model, reactions, options, size));
+  }
 
   return items;
 };

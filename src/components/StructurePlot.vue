@@ -9,17 +9,20 @@
 import { computed, onBeforeUnmount, onMounted, ref, toRaw, useId, watch } from 'vue';
 import { modelFromSolver } from '../core/fromSolver';
 import type { PlotModel } from '../core/model';
-import { fitScene, placeLabels, resolveScene, textWidth, type SceneItem, type Tone } from '../core/scene';
+import { layoutStructure } from '../core/layout';
+import { SUB_DROP, SUB_SCALE, textWidth, type Tone } from '../core/scene';
 import {
-  buildStructureScene,
   defaultResultLayer,
+  diagramScales,
+  diagramSide,
+  isBarStructure,
   PLOT_LAYERS,
   type PlotLayer,
-  type ResultLabelMode,
 } from '../core/structure';
 import { DEFAULT_NUMBER_FORMAT, resolveUnits } from '../core/units';
-import { formatReadout, readoutAt, type Readout } from '../core/readout';
+import { formatReadout, readoutAt, readoutMarks, type Readout, type ReadoutQuantity } from '../core/readout';
 import { PLOT_CSS, toneVars } from './theme';
+import { usePlotTexts } from './texts';
 import type { StructurePlotEmits, StructurePlotProps } from './types';
 
 const props = withDefaults(defineProps<StructurePlotProps>(), {
@@ -81,39 +84,27 @@ const options = computed(() => ({
   diagramScale: props.diagramScale,
   momentOnTensionSide: props.momentOnTensionSide,
   resultLabelMode: props.resultLabelMode,
+  reactionLabels: props.reactionLabels,
+  temperatureSymbols: texts.value.temperature,
   fontSize: fontSize.value,
 }));
 
-/**
- * Fit with every label, see which survive, then fit again on those: a label that is dropped for
- * crowding does not shrink the structure. The last pass may bring back any label that now fits.
- */
-const layout = computed(() => {
-  const box = {
-    width: width.value,
-    height: props.height,
-    maxHeight: props.maxHeight ?? (props.compact ? undefined : Math.max(320, width.value * 0.75)),
-    padding: props.padding,
-    fontSize: fontSize.value,
-  };
-  const scene = (s: number, mode: ResultLabelMode = props.resultLabelMode): SceneItem[] =>
-    buildStructureScene(model.value, { ...options.value, resultLabelMode: mode, scale: s });
-  /** The items a style's fit rests on: everything, with only the labels that survive crowding. */
-  const fitItems = (mode: ResultLabelMode): SceneItem[] => {
-    const first = scene(1, mode);
-    const kept = placeLabels(first, fitScene(first, box), { fontSize: fontSize.value });
-    return first.flatMap((item): SceneItem[] => {
-      if (item.kind !== 'text') return [item];
-      const placed = kept.get(item);
-      return placed ? [placed] : [];
-    });
-  };
-  // One fit for every reserved label style, so switching between them leaves the drawing in place
-  const modes = [...new Set([props.resultLabelMode, ...(props.reserveLabelModes ?? [])])];
-  const fit = fitScene(modes.flatMap(fitItems), box);
-  const items = scene(fit.s);
-  return { fit, items, resolved: resolveScene(items, fit, { fontSize: fontSize.value, viewport: fit }) };
-});
+const layout = computed(() =>
+  layoutStructure(
+    model.value,
+    { ...options.value, resultLabelMode: props.resultLabelMode },
+    {
+      width: width.value,
+      height: props.height,
+      maxHeight: props.maxHeight ?? (props.compact ? undefined : Math.max(320, width.value * 0.75)),
+      padding: props.padding,
+      fontSize: fontSize.value,
+    },
+    shown.value,
+    props.reserveLabelModes ?? [],
+    props.reserveReactionLabels ?? []
+  )
+);
 
 const groups = computed(() =>
   PLOT_LAYERS.filter((layer) => reserved.value.has(layer)).map((layer) => ({
@@ -128,19 +119,8 @@ const groups = computed(() =>
 const colour = (tone: Tone | 'paper') => `var(--ebp-${tone})`;
 const rootStyle = computed(() => toneVars(props.colors));
 
-const label = computed(() => {
-  if (props.title) return props.title;
-  const names: Partial<Record<PlotLayer, string>> = {
-    N: 'normal force',
-    V: 'shear force',
-    M: 'bending moment',
-    w: 'deformed shape',
-    reactions: 'reactions',
-    loads: 'loads',
-  };
-  const parts = [...shown.value].flatMap((l) => (names[l] ? [names[l]] : []));
-  return parts.length > 0 ? `Structure with its ${parts.join(', ')}` : 'Structure';
-});
+const texts = usePlotTexts();
+const label = computed(() => props.title || texts.value.structure([...shown.value]));
 
 /* ── Reading values: only with `hover`, so a static plot never takes the pointer ─────────── */
 const readout = ref<Readout | null>(null);
@@ -150,9 +130,30 @@ const onMove = (e: PointerEvent) => {
   if (!rect || rect.width === 0) return;
   const px = ((e.clientX - rect.left) / rect.width) * layout.value.fit.width;
   const py = ((e.clientY - rect.top) / rect.height) * layout.value.fit.height;
-  readout.value = readoutAt(model.value, layout.value.fit, px, py, 18);
+  // Within reach of a member, or anywhere over its diagram, which stands up to `diagramSize` off it
+  const reach = 18 + (readable.value.length > 0 ? options.value.diagramSize : 0);
+  readout.value = readoutAt(model.value, layout.value.fit, px, py, reach);
 };
 const onLeave = () => (readout.value = null);
+
+/** The results drawn as a curve the readout can point at; a truss's forces are numbers on its bars. */
+const readable = computed((): ReadoutQuantity[] =>
+  (['N', 'V', 'M', 'w'] as const).filter(
+    (q) =>
+      shown.value.has(q) &&
+      !(q === 'N' && model.value.results && isBarStructure(model.value, model.value.results.members))
+  )
+);
+
+/** The read values' points on the drawing: each shown diagram's ordinate tip, the deformed point. */
+const marks = computed(() => {
+  const r = readout.value;
+  if (!r) return [];
+  const k = diagramScales(model.value, options.value);
+  const mot = props.momentOnTensionSide;
+  const side = { N: diagramSide('N', mot), V: diagramSide('V', mot), M: diagramSide('M', mot) };
+  return readoutMarks(model.value, layout.value.fit, r, readable.value, k, side);
+});
 watch(readout, (value) => emit('readout', value));
 
 const pill = computed(() => {
@@ -171,9 +172,11 @@ const pill = computed(() => {
   // Bold text runs about 8 % wider than the regular widths `textWidth` estimates.
   const w = Math.max(...lines.map((l) => textWidth(l.text, fontSize.value))) * 1.08 + 16;
   const h = lines.length * (fontSize.value + 5) + 8;
-  const right = r.px + 14 + w < layout.value.fit.width;
-  const x = right ? r.px + 14 : r.px - 14 - w;
-  const y = Math.min(Math.max(4, r.py - h - 10), layout.value.fit.height - h - 4);
+  // Beside the point the values belong to: the first diagram's tip, else the member point
+  const [ax, ay] = marks.value[0]?.to ?? [r.px, r.py];
+  const right = ax + 14 + w < layout.value.fit.width;
+  const x = right ? ax + 14 : ax - 14 - w;
+  const y = Math.min(Math.max(4, ay - h - 10), layout.value.fit.height - h - 4);
   return { x, y, w, h, lines };
 });
 </script>
@@ -206,9 +209,9 @@ const pill = computed(() => {
           v-for="(p, i) in g.paths"
           :key="i"
           :d="p.d"
-          :class="{ 'ebp-draw': p.draw !== undefined }"
-          :pathLength="p.draw !== undefined ? 1 : undefined"
-          :style="p.draw !== undefined ? { transitionDelay: `${p.draw * 140}ms` } : undefined"
+          :class="{ 'ebp-draw': animate && p.draw !== undefined }"
+          :pathLength="animate && p.draw !== undefined ? 1 : undefined"
+          :style="animate && p.draw !== undefined ? { transitionDelay: `${p.draw * 140}ms` } : undefined"
           :stroke="p.width > 0 ? colour(p.tone) : 'none'"
           :stroke-width="p.width > 0 ? p.width : undefined"
           :stroke-opacity="p.opacity"
@@ -236,28 +239,58 @@ const pill = computed(() => {
         :class="[`ebp-layer-${g.layer}`, { 'ebp-on': g.on }]"
         :aria-hidden="g.on ? undefined : 'true'"
       >
-        <text
-          v-for="(t, i) in g.texts"
-          :key="i"
-          :x="t.x"
-          :y="t.y"
-          :text-anchor="t.anchor"
-          :transform="t.transform"
-          :fill="colour(t.tone)"
-          :font-weight="t.weight"
-          :font-size="t.size"
-          v-text="t.text"
-        />
+        <template v-for="(t, i) in g.texts" :key="i">
+          <!-- A label with a subscript gets its halo as a text of its own underneath: painted per run,
+               the subscript's halo would cover the end of the letter before it -->
+          <text
+            v-if="t.sub"
+            class="ebp-halo"
+            aria-hidden="true"
+            :x="t.x"
+            :y="t.y"
+            :text-anchor="t.anchor"
+            :transform="t.transform"
+            :fill="colour('paper')"
+            :font-weight="t.weight"
+            :font-size="t.size"
+            :font-style="t.italic ? 'italic' : undefined"
+          >
+            {{ t.text
+            }}<tspan :font-size="(t.size ?? fontSize) * SUB_SCALE" :dy="(t.size ?? fontSize) * SUB_DROP">{{
+              t.sub
+            }}</tspan>
+          </text>
+          <text
+            :class="{ 'ebp-nohalo': t.sub }"
+            :x="t.x"
+            :y="t.y"
+            :text-anchor="t.anchor"
+            :transform="t.transform"
+            :fill="colour(t.tone)"
+            :font-weight="t.weight"
+            :font-size="t.size"
+            :font-style="t.italic ? 'italic' : undefined"
+          >
+            {{ t.text
+            }}<tspan v-if="t.sub" :font-size="(t.size ?? fontSize) * SUB_SCALE" :dy="(t.size ?? fontSize) * SUB_DROP">{{
+              t.sub
+            }}</tspan>
+          </text>
+        </template>
       </g>
       <g v-if="pill && readout" class="ebp-readout" pointer-events="none">
-        <circle
-          :cx="readout.px"
-          :cy="readout.py"
-          r="4"
-          :fill="colour('ink')"
-          :stroke="colour('paper')"
-          stroke-width="1.5"
-        />
+        <circle :cx="readout.px" :cy="readout.py" r="2.5" :fill="colour('ink')" />
+        <template v-for="(m, i) in marks" :key="i">
+          <line :x1="m.from[0]" :y1="m.from[1]" :x2="m.to[0]" :y2="m.to[1]" :stroke="colour(m.tone)" stroke-width="2" />
+          <circle
+            :cx="m.to[0]"
+            :cy="m.to[1]"
+            r="4"
+            :fill="colour(m.tone)"
+            :stroke="colour('paper')"
+            stroke-width="1.5"
+          />
+        </template>
         <rect
           :x="pill.x"
           :y="pill.y"

@@ -29,13 +29,14 @@ export const toneVars = (colors?: Partial<PlotColors>): Record<string, string> =
   Object.fromEntries(Object.entries({ ...DEFAULT_COLORS, ...colors }).map(([tone, value]) => [`--ebp-${tone}`, value]));
 
 /**
- * Inlined into each SVG rather than shipped as a stylesheet, so a plot needs no CSS import, renders
- * the same on the server and stays styled when saved as a file. Every class is `ebp-` prefixed;
- * a page can restyle them, e.g. to change the timing.
+ * Inlined into each SVG rather than shipped as a stylesheet, so a plot needs no CSS import and
+ * renders the same on the server. Its colours stay CSS custom properties of the page: for a file,
+ * use `structureSvg`. Every class is `ebp-` prefixed; a page can restyle them, e.g. the timing.
  */
 export const PLOT_CSS = `
 .ebp-svg{display:block;max-width:100%;height:auto;overflow:visible;font-family:var(--ebp-font,var(--font-sans,inherit));font-variant-numeric:tabular-nums;-webkit-user-select:none;user-select:none}
 .ebp-svg text{paint-order:stroke;stroke:var(--ebp-paper);stroke-width:4px;stroke-linejoin:round}
+.ebp-svg text.ebp-nohalo{stroke:none}
 .ebp-svg .ebp-math{font-family:KaTeX_Main,'Latin Modern Roman',Georgia,serif}
 .ebp-svg .ebp-math tspan.ebp-var{font-family:KaTeX_Math,'Latin Modern Math',Georgia,serif;font-style:italic}
 .ebp-layer{opacity:0}

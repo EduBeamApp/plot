@@ -27,6 +27,7 @@ import {
 import { buildStructureScene, HATCH_SPACING_PX, type PlotLayer } from '../core/structure';
 import { DEFAULT_NUMBER_FORMAT, formatNumber, formatQuantity, resolveUnits, type Units } from '../core/units';
 import { PLOT_CSS, toneVars } from './theme';
+import { usePlotTexts } from './texts';
 import type { DiagramStackEmits, DiagramStackProps } from './types';
 
 const props = withDefaults(defineProps<DiagramStackProps>(), {
@@ -39,6 +40,7 @@ const props = withDefaults(defineProps<DiagramStackProps>(), {
 });
 
 const emit = defineEmits<DiagramStackEmits>();
+const texts = usePlotTexts();
 
 const titleId = useId();
 
@@ -307,11 +309,7 @@ const handle = computed(() => {
 
 const colour = (tone: Tone | 'paper') => `var(--ebp-${tone})`;
 const rootStyle = computed(() => toneVars(props.colors));
-const label = computed(
-  () =>
-    props.title ??
-    `A beam with its loads${props.rows.length ? `, and its ${props.rows.map((r) => ({ N: 'normal force', V: 'shear force', M: 'bending moment', w: 'deflection' })[r]).join(', ')} beneath` : ''}`
-);
+const label = computed(() => props.title ?? texts.value.stack(props.rows));
 const bottom = computed(() => {
   const last = rows.value[rows.value.length - 1];
   return last ? last.top + last.height : height.value;
@@ -447,11 +445,11 @@ const bottom = computed(() => {
         :class="{ 'ebp-dragging': dragging }"
         tabindex="0"
         role="slider"
-        :aria-label="`Position of the load ${handle.text}`"
+        :aria-label="texts.loadHandle(handle.text)"
         :aria-valuemin="0"
         :aria-valuemax="line.length"
         :aria-valuenow="loadAt"
-        :aria-valuetext="`${formatNumber(loadAt ?? 0)} m from the start of the beam`"
+        :aria-valuetext="texts.loadPosition(formatNumber(loadAt ?? 0))"
         @keydown="onKey"
       >
         <rect :x="handle.x - 22" :y="handle.y - 92" width="44" height="86" fill="transparent" />

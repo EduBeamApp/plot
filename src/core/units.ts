@@ -50,7 +50,8 @@ export const DEFAULT_NUMBER_FORMAT = new Intl.NumberFormat('en', { maximumFracti
  * The number alone, with a true minus sign, and no "-0" for a value that rounds to zero.
  */
 export const formatNumber = (value: number, format: Intl.NumberFormat = DEFAULT_NUMBER_FORMAT): string => {
-  const parts = format.formatToParts(value);
+  // Round away floating-point noise first: 8749.999999998 is 8750, and rounds as 8750 does
+  const parts = format.formatToParts(Number(value.toPrecision(12)));
   const rounded = parts
     .filter((p) => p.type === 'integer' || p.type === 'fraction')
     .map((p) => p.value)
