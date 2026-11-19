@@ -10,7 +10,7 @@ import type { Units } from '../core/units';
 import type { PlotColors } from './theme';
 
 export interface StructurePlotProps {
-  /** A ts-fem solver; solved, to show results. Pass a new one (or bump `revision`) after a change. */
+  /** An @edubeam/fem solver; solved, to show results. Pass a new one (or bump `revision`) after a change. */
   solver?: Solver;
   /** Or the plain data `modelFromSolver` makes, e.g. prepared at build time. */
   model?: PlotModel;
