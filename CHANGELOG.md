@@ -2,7 +2,7 @@
 
 All notable changes to `@edubeam/plot` are listed here. The project follows [Semantic Versioning](https://semver.org).
 
-## 0.2.0 (unreleased)
+## 0.2.0 (2026-11-19)
 
 - **Translatable screen-reader texts**: `PLOT_TEXTS` (an injection key) lets an app give the figure's accessible
   name and the movable load's slider texts in its own language, `app.provide(PLOT_TEXTS, { structure: (layers) => … })`,
