@@ -2,7 +2,7 @@
 
 All notable changes to `@edubeam/plot` are listed here. The project follows [Semantic Versioning](https://semver.org).
 
-## 0.3.0 (unreleased)
+## 0.3.0 (2026-11-20)
 
 - **Drawing for an editor**: the options the EduBeam app's new renderer draws with, all off by default.
   `sizes` overrides the symbols' px sizes; `loadLabels: 'ends'` writes a distributed load at both ends as bare
