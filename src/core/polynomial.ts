@@ -74,11 +74,17 @@ export const fitPiece = (f: (x: number) => number, x0: number, x1: number, degre
 };
 
 /** Largest |value| over the pieces, end values and interior extremes included. */
+/** Results are read once and never changed: each one's largest value is found once. */
+const maxAbsCache = new WeakMap<Piecewise, number>();
+
 export const maxAbs = (pw: Piecewise): number => {
+  const cached = maxAbsCache.get(pw);
+  if (cached !== undefined) return cached;
   let max = 0;
   for (const piece of pw) {
     for (const x of [piece.x0, piece.x1, ...pieceExtrema(piece)]) max = Math.max(max, Math.abs(evalPiece(piece, x)));
   }
+  maxAbsCache.set(pw, max);
   return max;
 };
 

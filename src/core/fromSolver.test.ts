@@ -206,7 +206,7 @@ describe('temperature', () => {
 
   it('reads the load as ΔTc and ΔTb − ΔTt', () => {
     const load = modelFromSolver(S.temperatureBeam(false, 15)).loads[0];
-    expect(load).toEqual({ kind: 'temperature', member: '1', uniform: 15, gradient: -10 });
+    expect(load).toEqual({ kind: 'temperature', member: '1', uniform: 15, gradient: -10, source: 'elementLoad:0' });
   });
 });
 
@@ -217,7 +217,14 @@ describe('prescribed displacement', () => {
     // Timoshenko shear flexibility takes a fraction of a percent off the Euler-Bernoulli value.
     expect(reaction(model, '2', 'dz') / R).toBeCloseTo(1, 2);
     expect(kN(reaction(model, '1', 'ry'))).toBeCloseTo(3.4, 1);
-    expect(model.loads).toContainEqual({ kind: 'prescribed', node: '2', dx: undefined, dz: 0.01, ry: undefined });
+    expect(model.loads).toContainEqual({
+      kind: 'prescribed',
+      node: '2',
+      dx: undefined,
+      dz: 0.01,
+      ry: undefined,
+      source: 'prescribed:0',
+    });
   });
 });
 

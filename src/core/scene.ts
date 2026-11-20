@@ -59,6 +59,11 @@ export type LayerIndex = (typeof LAYERS)[keyof typeof LAYERS];
 /** What every item carries: the caller's layer it belongs to, which switches it on and off. */
 interface SceneBase {
   readonly group: string;
+  /**
+   * What the item draws, for a caller that marks it on hover or selection: `member:<id>`,
+   * `node:<id>`, or a load's own `source`. Items of nothing in particular (dimensions) have none.
+   */
+  readonly entity?: string;
 }
 
 export interface ScenePath extends SceneBase {
@@ -84,6 +89,11 @@ export interface ScenePath extends SceneBase {
   readonly shield?: boolean;
   /** Drawn on from start to end when it appears; the number staggers members one after another. */
   readonly draw?: number;
+  /**
+   * Not drawn: the area a caller hit-tests the item it belongs to by (a distributed load's band,
+   * mostly empty between its arrows). Never an obstacle, never fitted.
+   */
+  readonly hitArea?: boolean;
 }
 
 export type TextAlign = 'start' | 'middle' | 'end';
@@ -100,6 +110,11 @@ export interface TextPlacement {
   readonly size?: number;
   /** Clockwise turn, degrees. */
   readonly rotate?: number;
+  /**
+   * The spot may cross another diagram's outline, the label's halo keeping it readable: beside a
+   * value at the same point, which is where a reader looks for it, rather than further away.
+   */
+  readonly acrossDiagrams?: boolean;
 }
 
 export interface SceneText extends SceneBase {
@@ -120,6 +135,8 @@ export interface SceneText extends SceneBase {
   readonly size?: number;
   /** Written after `text`, smaller and lower: the x of A_x. */
   readonly sub?: string;
+  /** The place may cross another diagram's outline (see TextPlacement). */
+  readonly acrossDiagrams?: boolean;
   /** Other places to try, in order, when the first is taken. */
   readonly alternatives?: readonly TextPlacement[];
 }
@@ -323,6 +340,7 @@ export const fitScene = (items: readonly SceneItem[], box: FitBox): Fit => {
 
 export interface ResolvedPath {
   readonly group: string;
+  readonly entity?: string;
   readonly d: string;
   readonly layer: LayerIndex;
   readonly tone: Tone;
@@ -333,10 +351,13 @@ export interface ResolvedPath {
   readonly dash?: string;
   readonly cap?: 'round' | 'butt';
   readonly draw?: number;
+  /** Not to be drawn: an area to hit-test by (see ScenePath) */
+  readonly hitArea?: boolean;
 }
 
 export interface ResolvedText {
   readonly group: string;
+  readonly entity?: string;
   readonly x: number;
   readonly y: number;
   readonly text: string;
@@ -351,6 +372,7 @@ export interface ResolvedText {
 
 export interface ResolvedCircle {
   readonly group: string;
+  readonly entity?: string;
   readonly cx: number;
   readonly cy: number;
   readonly r: number;
@@ -364,6 +386,11 @@ export interface ResolvedScene {
   readonly paths: readonly ResolvedPath[];
   readonly circles: readonly ResolvedCircle[];
   readonly texts: readonly ResolvedText[];
+  /**
+   * What is painted, px at the transform's scale with no translation: the labels where they were
+   * placed (left-out ones not at all), without the fit-ignored hatching and hit areas.
+   */
+  readonly bounds: Bounds;
 }
 
 const n = (v: number): string => {
@@ -441,6 +468,21 @@ export interface ResolveOptions {
    * hidden diagram does not keep a load's value off the place it would take.
    */
   readonly shields?: ReadonlySet<string>;
+  /**
+   * Groups placed after every other label: the results, read off the structure. The others (loads,
+   * reactions, names) are what the reader was given, so they go first. With it, a label that finds
+   * no place clear of another diagram's outline may cross it, its halo keeping it readable, rather
+   * than be left out. Without it, every group is placed by priority alone.
+   */
+  readonly lateGroups?: ReadonlySet<string>;
+  /**
+   * Groups that give way to every other label: their labels are placed last, and their lines keep
+   * no other group's label off (an editor's loads, whose values stand outside their bands while the
+   * internal forces' values may lie over a band's side).
+   */
+  readonly yieldingGroups?: ReadonlySet<string>;
+  /** Groups whose labels are never left out: with no free place, at their first place all the same. */
+  readonly keptGroups?: ReadonlySet<string>;
 }
 
 /**
@@ -448,13 +490,91 @@ export interface ResolveOptions {
  * cross a member, or leave the viewport - so the figure never shows two numbers on top of each
  * other or a number struck through by the structure.
  */
+/**
+ * A uniform grid over the screen: each entry is listed in every cell its box touches, so a query
+ * returns what lies near a box without looking at everything else. Placing a label then costs
+ * about the same whatever the size of the model.
+ */
+class Grid<T> {
+  private readonly cells = new Map<number, T[]>();
+  /** Every entry, for a query too large to go cell by cell */
+  private readonly all: T[] = [];
+  /**
+   * Entries too large to list cell by cell: a member drawn at an extreme zoom (a fit's first probe)
+   * spans millions of px, and listing it in every cell it crosses ran out of memory.
+   */
+  private readonly large: T[] = [];
+  constructor(private readonly size: number) {}
+  private key(i: number, j: number): number {
+    // Cell indices well inside ±2^20 for any screen: packed into one safe integer. Beyond, keys may
+    // coincide, which only offers a caller more candidates to check
+    return (i + 1048576) * 2097152 + (j + 1048576);
+  }
+  /** The cells a box covers, or null when they are too many to visit one by one */
+  private span(b: Bounds): [number, number, number, number] | null {
+    const i0 = Math.floor(b.minX / this.size);
+    const i1 = Math.floor(b.maxX / this.size);
+    const j0 = Math.floor(b.minY / this.size);
+    const j1 = Math.floor(b.maxY / this.size);
+    // Not finite counts as too many
+    return (i1 - i0 + 1) * (j1 - j0 + 1) <= MAX_GRID_CELLS ? [i0, i1, j0, j1] : null;
+  }
+  add(b: Bounds, value: T): void {
+    this.all.push(value);
+    const span = this.span(b);
+    if (!span) {
+      this.large.push(value);
+      return;
+    }
+    const [i0, i1, j0, j1] = span;
+    for (let i = i0; i <= i1; i++) {
+      for (let j = j0; j <= j1; j++) {
+        const k = this.key(i, j);
+        const cell = this.cells.get(k);
+        if (cell) cell.push(value);
+        else this.cells.set(k, [value]);
+      }
+    }
+  }
+  /** Every entry whose cells meet the box, each once (`seen` marks them for this query). */
+  near(b: Bounds, seen: Set<T>): T[] {
+    seen.clear();
+    const out: T[] = [];
+    const take = (v: T) => {
+      if (seen.has(v)) return;
+      seen.add(v);
+      out.push(v);
+    };
+    const span = this.span(b);
+    if (!span) {
+      this.all.forEach(take);
+      return out;
+    }
+    this.large.forEach(take);
+    const [i0, i1, j0, j1] = span;
+    for (let i = i0; i <= i1; i++) {
+      for (let j = j0; j <= j1; j++) {
+        this.cells.get(this.key(i, j))?.forEach(take);
+      }
+    }
+    return out;
+  }
+}
+
+/** The most cells an entry or a query is listed in one by one */
+const MAX_GRID_CELLS = 256;
+
+/** Cell size of the label grid, px: about a label's length */
+const GRID_PX = 48;
+
 export const placeLabels = (
   items: readonly SceneItem[],
   t: Transform,
   options: ResolveOptions
 ): Map<SceneText, SceneText> => {
   /** Segments labels keep off, px, with their padding and, for a shield, the group it belongs to. */
-  const obstacles: [[number, number], [number, number], number, string | null][] = [];
+  type Obstacle = [[number, number], [number, number], number, string | null, string];
+  const obstacles: Obstacle[] = [];
   for (const item of items) {
     if (item.kind !== 'path' || !(item.obstacle || (item.shield && (options.shields?.has(item.group) ?? true))))
       continue;
@@ -475,7 +595,7 @@ export const placeLabels = (
         for (let i = 1; i <= 12; i++) {
           const a = a0 + ((a1 - a0) * i) / 12;
           const q: [number, number] = [cx + seg.r * Math.cos(a), cy + seg.r * Math.sin(a)];
-          obstacles.push([last, q, pad, owner]);
+          obstacles.push([last, q, pad, owner, item.group]);
           last = q;
         }
       } else if (seg.op === 'C' && prev) {
@@ -490,10 +610,10 @@ export const placeLabels = (
             v * v * v * prev[0] + 3 * v * v * u * c1[0] + 3 * v * u * u * c2[0] + u * u * u * p[0],
             v * v * v * prev[1] + 3 * v * v * u * c1[1] + 3 * v * u * u * c2[1] + u * u * u * p[1],
           ];
-          obstacles.push([last, q, pad, owner]);
+          obstacles.push([last, q, pad, owner, item.group]);
           last = q;
         }
-      } else if (prev && seg.op !== 'M') obstacles.push([prev, p, pad, owner]);
+      } else if (prev && seg.op !== 'M') obstacles.push([prev, p, pad, owner, item.group]);
       prev = p;
     }
   }
@@ -501,16 +621,39 @@ export const placeLabels = (
   const texts = items.flatMap((item, i) => (item.kind === 'text' ? [{ item, i }] : []));
   // The labels that are always on (loads, reactions) go first, so which result is on show never
   // changes them; each result's numbers then find room around them.
-  const late = (label: SceneText) => (alternativeGroups.has(label.group) ? 1 : 0);
+  const lateGroups = options.lateGroups;
+  const yielding = options.yieldingGroups;
+  const late = (label: SceneText) =>
+    yielding?.has(label.group) ? 3 : alternativeGroups.has(label.group) ? 2 : lateGroups?.has(label.group) ? 1 : 0;
   texts.sort((a, b) => late(a.item) - late(b.item) || b.item.priority - a.item.priority || a.i - b.i);
-  const kept: { box: Bounds; group: string }[] = [];
+  // Both indexed by where they are, so a label is tested only against what lies near it
+  type Kept = { box: Bounds; group: string };
+  const kept = new Grid<Kept>(GRID_PX);
+  const lines = new Grid<Obstacle>(GRID_PX);
+  let maxPad = 0;
+  for (const o of obstacles) {
+    const [p, q, pad] = o;
+    maxPad = Math.max(maxPad, pad);
+    lines.add(
+      {
+        minX: Math.min(p[0], q[0]) - pad,
+        maxX: Math.max(p[0], q[0]) + pad,
+        minY: Math.min(p[1], q[1]) - pad,
+        maxY: Math.max(p[1], q[1]) + pad,
+      },
+      o
+    );
+  }
+  const seenKept = new Set<Kept>();
+  const seenLines = new Set<Obstacle>();
   const result = new Map<SceneText, SceneText>();
   const vp = options.viewport;
   const competes = (a: string, b: string) => a === b || !alternativeGroups.has(a) || !alternativeGroups.has(b);
-  const fits = (item: SceneText): Bounds | null => {
+  const fits = (item: SceneText, acrossDiagrams = false): Bounds | null => {
     const box = textBounds(item, t, options.fontSize);
     if (vp && (box.minX < 0 || box.minY < 0 || box.maxX > vp.width || box.maxY > vp.height)) return null;
-    if (kept.some((k) => competes(k.group, item.group) && overlaps(k.box, box, 1))) return null;
+    const nearBox = { minX: box.minX - 1, maxX: box.maxX + 1, minY: box.minY - 1, maxY: box.maxY + 1 };
+    if (kept.near(nearBox, seenKept).some((k) => competes(k.group, item.group) && overlaps(k.box, box, 1))) return null;
     // Against the lines, in the text's own frame so a label turned along a bar is tested as drawn;
     // a little inside its box, which the glyphs do not fill.
     const [ax, ay] = project(t, item.at);
@@ -522,11 +665,19 @@ export const placeLabels = (
       (x - ax) * s + (y - ay) * c,
     ];
     const own = textBox(item.text, item.size ?? options.fontSize, item.align, item.baseline, item.sub);
-    const blocks = (owner: string | null) =>
-      owner === null || (owner !== item.group && !alternativeGroups.has(item.group));
-    const hit = obstacles.some(
-      ([p, q, pad, owner]) =>
-        blocks(owner) &&
+    const blocks = (owner: string | null, group: string) =>
+      // A yielding group's lines keep only its own labels off
+      (!yielding?.has(group) || group === item.group) &&
+      (owner === null || (!acrossDiagrams && owner !== item.group && !alternativeGroups.has(item.group)));
+    const reach = {
+      minX: box.minX - maxPad,
+      maxX: box.maxX + maxPad,
+      minY: box.minY - maxPad,
+      maxY: box.maxY + maxPad,
+    };
+    const hit = lines.near(reach, seenLines).some(
+      ([p, q, pad, owner, group]) =>
+        blocks(owner, group) &&
         segmentHitsBox(local(p), local(q), {
           minX: own.x0 - pad + 1,
           maxX: own.x1 + pad - 1,
@@ -538,18 +689,73 @@ export const placeLabels = (
   };
   for (const { item } of texts) {
     if (options.exclude?.has(item)) continue;
-    for (const variant of [item, ...(item.alternatives ?? []).map((alt) => ({ ...item, ...alt }))]) {
-      const box = fits(variant);
-      if (!box) continue;
-      kept.push({ box, group: item.group });
-      result.set(item, variant);
-      break;
+    const variants = [item, ...(item.alternatives ?? []).map((alt) => ({ ...item, ...alt }))];
+    // A label that found no place clear of the other diagrams may cross one, its halo keeping it
+    // readable, rather than go missing: the given data first, then each result's values
+    const retry = lateGroups !== undefined && !alternativeGroups.has(item.group);
+    place: for (const acrossDiagrams of retry ? [false, true] : [false]) {
+      for (const variant of variants) {
+        const box = fits(variant, acrossDiagrams || variant.acrossDiagrams === true);
+        if (!box) continue;
+        kept.add(box, { box, group: item.group });
+        result.set(item, variant);
+        break place;
+      }
+    }
+    // Given data is never left out
+    if (!result.has(item) && options.keptGroups?.has(item.group)) {
+      const box = textBounds(item, t, options.fontSize);
+      if (!vp || (box.minX >= 0 && box.minY >= 0 && box.maxX <= vp.width && box.maxY <= vp.height)) {
+        kept.add(box, { box, group: item.group });
+        result.set(item, item);
+      }
     }
   }
   return result;
 };
 
 /** Screen geometry for the scene, with the labels `placeLabels` keeps. */
+/**
+ * The resolved paths with every run that would paint alike - same layer, group, entity and style -
+ * joined into one path: a band of thirty arrows becomes two paths (shafts, heads) instead of sixty.
+ * Paint order is kept between layers and between different styles; within a layer, alike paths
+ * gather where the first of them was. Paths that animate on (`draw`) are left alone.
+ */
+export const mergePaths = (paths: readonly ResolvedPath[]): ResolvedPath[] => {
+  const out: ResolvedPath[] = [];
+  const at = new Map<string, number>();
+  let layer: number | null = null;
+  for (const p of paths) {
+    // Alike only within one layer, so a later layer still paints over an earlier one
+    if (p.layer !== layer) {
+      at.clear();
+      layer = p.layer;
+    }
+    if (p.draw !== undefined) {
+      out.push(p);
+      continue;
+    }
+    const key = [
+      p.group,
+      p.entity ?? '',
+      p.tone,
+      p.width,
+      p.fill ?? '',
+      p.fillOpacity ?? '',
+      p.opacity ?? '',
+      p.dash ?? '',
+      p.cap ?? '',
+      p.hitArea ? 1 : 0,
+    ].join('|');
+    const i = at.get(key);
+    if (i === undefined) {
+      at.set(key, out.length);
+      out.push(p);
+    } else out[i] = { ...out[i], d: `${out[i].d}${p.d}` };
+  }
+  return out;
+};
+
 export const resolveScene = (items: readonly SceneItem[], t: Transform, options: ResolveOptions): ResolvedScene => {
   const keep = placeLabels(items, t, options);
   const paths: ResolvedPath[] = [];
@@ -560,6 +766,7 @@ export const resolveScene = (items: readonly SceneItem[], t: Transform, options:
     if (item.kind === 'path') {
       paths.push({
         group: item.group,
+        entity: item.entity,
         d: pathData(item.segments, t),
         layer: item.layer,
         tone: item.tone,
@@ -570,11 +777,13 @@ export const resolveScene = (items: readonly SceneItem[], t: Transform, options:
         dash: item.dash,
         cap: item.cap,
         draw: item.draw,
+        hitArea: item.hitArea,
       });
     } else if (item.kind === 'circle') {
       const [cx, cy] = project(t, item.at);
       circles.push({
         group: item.group,
+        entity: item.entity,
         cx,
         cy,
         r: item.r,
@@ -590,6 +799,7 @@ export const resolveScene = (items: readonly SceneItem[], t: Transform, options:
       const rotate = placed.rotate ?? 0;
       texts.push({
         group: item.group,
+        entity: item.entity,
         x: Math.round(x * 100) / 100,
         y: Math.round((y + BASELINE_SHIFT[placed.baseline] * (placed.size ?? options.fontSize)) * 100) / 100,
         text: placed.text,
@@ -604,5 +814,11 @@ export const resolveScene = (items: readonly SceneItem[], t: Transform, options:
     }
   }
 
-  return { paths: paths.sort((a, b) => a.layer - b.layer), circles, texts };
+  const painted = items.flatMap((item): SceneItem[] => {
+    if (item.kind !== 'text') return [item];
+    const placed = keep.get(item);
+    return placed ? [placed] : [];
+  });
+  const bounds = sceneBounds(painted, t.s, options.fontSize);
+  return { paths: paths.sort((a, b) => a.layer - b.layer), circles, texts, bounds };
 };

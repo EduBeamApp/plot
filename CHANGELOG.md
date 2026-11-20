@@ -2,6 +2,39 @@
 
 All notable changes to `@edubeam/plot` are listed here. The project follows [Semantic Versioning](https://semver.org).
 
+## 0.3.0 (unreleased)
+
+- **Drawing for an editor**: the options the EduBeam app's new renderer draws with, all off by default.
+  `sizes` overrides the symbols' px sizes; `loadLabels: 'ends'` writes a distributed load at both ends as bare
+  numbers; `constantDiagrams: 'ends'` and `cornerValues: 'each'` annotate every segment and every member's end;
+  `splitLoads` draws a load's two components as the two loads they were entered as; `sideBySide` stands two
+  values written along one ordinate line side by side, each half a line aside, rather than one pushed out;
+  `freeNodes` draws nodes no member reaches yet; `labelsAvoidSupports`, `displacementText`, `diagramFill`
+  (`hatch`, `solid`, `none`), `showDegrees`, `normalOnDashedSide`, `shearOnDashedSide` and `supportScale` follow
+  the app's settings.
+- **Member names**: a `memberLabels` layer writes each member's name once, along it and never upside down.
+- **Loads that push the same way stack**, as a textbook draws them: a second band on top of the first, a point
+  load's arrow beyond the last one's value.
+- **Reactions on their line of action**: every reaction force, the horizontal ones too, now points at its node.
+- A diagram running straight on through a node writes the value it has on both sides once.
+- **Pointing at things**: paths, circles and texts carry the `entity` they draw (`member:…`, `node:…`,
+  `elementLoad:…`, `nodalLoad:…`), loads carry their `source` from `modelFromSolver`, and each distributed
+  load has an undrawn `hitArea` path covering its band, so an app can highlight or hit-test what it shows.
+- **Values at the pointer**: `placeReadoutTags` places a readout's tags beside their diagram points, outward
+  only and inside a viewport; `readMember` and `readoutAt` snap to a member's ends and, for the quantities read,
+  to their interior extremes (the largest moment, where the shear is zero, first); `formatReadout` takes a
+  writer for displacements.
+- **Label priorities**: `resolveScene` takes `lateGroups` (placed after the given data), `yieldingGroups` (give
+  way to every other label) and `keptGroups` (never left out), and reports the painted `bounds`. A text placement
+  marked `acrossDiagrams` may cross another diagram's outline.
+- A structure drawn at an extreme zoom (a fit's first probe) no longer runs out of memory: a member gets at most
+  500 load arrows or hatch lines, spaced wider when it is longer.
+- **Faster**: labels are placed against a spatial grid (a 375-member frame placed in 0.3 s, down from 10 s),
+  `mergePaths` joins alike paths (a band of thirty arrows becomes two paths), and diagram maxima are cached.
+- **`sceneSvg`** writes a scene laid out by an application as a standalone `.svg` file, and **`sceneMarkup`** as
+  markup for an SVG of its own, with the same Word- and Inkscape-safe output as `structureSvg`.
+- `SymbolSizes` is exported.
+
 ## 0.2.0 (2026-11-19)
 
 - **Translatable screen-reader texts**: `PLOT_TEXTS` (an injection key) lets an app give the figure's accessible

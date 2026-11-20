@@ -13,7 +13,15 @@ export { DEFAULT_PLOT_TEXTS, PLOT_TEXTS, usePlotTexts, type PlotTexts } from './
 
 export { modelFromSolver, type FromSolverOptions } from './core/fromSolver';
 export { layoutStructure, alternativeResultGroups, type StructureLayout } from './core/layout';
-export { structureSvg, PRINT_COLORS, type StructureSvgOptions } from './core/svg';
+export {
+  structureSvg,
+  sceneSvg,
+  sceneMarkup,
+  PRINT_COLORS,
+  type StructureSvgOptions,
+  type SceneSvgOptions,
+  type SceneMarkupOptions,
+} from './core/svg';
 export * from './core/model';
 export * from './core/polynomial';
 export * from './core/units';
@@ -43,12 +51,14 @@ export {
   type ResultLabelMode,
   type ResultLayer,
   type StructureSceneOptions,
+  type SymbolSizes,
   tipPlacements,
 } from './core/structure';
 export {
   fitScene,
   placeLabels,
   resolveScene,
+  mergePaths,
   sceneBounds,
   project,
   type Anchor,
@@ -71,6 +81,8 @@ export {
   readoutAt,
   readoutMarks,
   formatReadout,
+  placeReadoutTags,
+  type ReadoutTag,
   type Readout,
   type ReadoutMark,
   type ReadoutQuantity,

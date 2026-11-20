@@ -5,7 +5,15 @@
  */
 import { layoutStructure } from './layout';
 import type { PlotModel } from './model';
-import { SUB_DROP, SUB_SCALE, type ResolvedCircle, type ResolvedPath, type ResolvedText, type Tone } from './scene';
+import {
+  SUB_DROP,
+  SUB_SCALE,
+  type ResolvedCircle,
+  type ResolvedPath,
+  type ResolvedScene,
+  type ResolvedText,
+  type Tone,
+} from './scene';
 import {
   defaultResultLayer,
   PLOT_LAYERS,
@@ -128,6 +136,39 @@ export const structureSvg = (model: PlotModel, options: StructureSvgOptions = {}
     circles: all.circles.filter((o) => shown.has(o.group)),
     texts: all.texts.filter((t) => shown.has(t.group)),
   };
+  return sceneSvg(resolved, fit, {
+    colors: options.colors,
+    fontSize,
+    fontFamily: options.fontFamily,
+    background: options.background,
+    title: options.title,
+  });
+};
+
+export interface SceneSvgOptions {
+  readonly colors?: Partial<Record<Tone | 'paper', string>>;
+  /** The labels' size where a label has none of its own, px. Default 13. */
+  readonly fontSize?: number;
+  readonly fontFamily?: string;
+  /** Paint the background in `paper`; off leaves it transparent. Default on. */
+  readonly background?: boolean;
+  /** Accessible name, written as the SVG's `<title>`. */
+  readonly title?: string;
+}
+
+/** How a scene's shapes and labels are written: its colours and its labels' size. */
+export type SceneMarkupOptions = Pick<SceneSvgOptions, 'colors' | 'fontSize'>;
+
+/**
+ * A scene already laid out, as SVG markup without the root element: its shapes layer by layer in
+ * paint order, then every label, each with its halo as a text of its own underneath (for programs
+ * that ignore `paint-order`). For an application that places the drawing in an SVG of its own.
+ */
+export const sceneMarkup = (
+  resolved: Pick<ResolvedScene, 'paths' | 'circles' | 'texts'>,
+  options: SceneMarkupOptions = {}
+): string => {
+  const fontSize = options.fontSize ?? 13;
   const colors = { ...PRINT_COLORS, ...options.colors };
   const c = (tone: Tone | 'paper') => colors[tone];
   const path = (p: ResolvedPath) =>
@@ -163,11 +204,11 @@ export const structureSvg = (model: PlotModel, options: StructureSvgOptions = {}
       transform: t.transform,
     };
     // A subscript as a tspan with plain numbers, which Word and Inkscape both read
-    const size = t.size ?? fontSize;
+    const textSize = t.size ?? fontSize;
     const content =
       escapeXml(t.text) +
       (t.sub
-        ? `<tspan ${attrs({ 'font-size': round(size * SUB_SCALE), dy: round(size * SUB_DROP) })}>${escapeXml(t.sub)}</tspan>`
+        ? `<tspan ${attrs({ 'font-size': round(textSize * SUB_SCALE), dy: round(textSize * SUB_DROP) })}>${escapeXml(t.sub)}</tspan>`
         : '');
     return [
       `<text ${attrs({ ...common, fill: c('paper'), stroke: c('paper'), 'stroke-width': 4, 'stroke-linejoin': 'round' })}>${content}</text>`,
@@ -176,24 +217,36 @@ export const structureSvg = (model: PlotModel, options: StructureSvgOptions = {}
   };
   // Layer by layer in paint order, every label on top: as the component paints
   const shapes = PLOT_LAYERS.flatMap((layer) => [
-    ...resolved.paths.filter((p) => p.group === layer).map(path),
+    ...resolved.paths.filter((p) => p.group === layer && !p.hitArea).map(path),
     ...resolved.circles.filter((o) => o.group === layer).map(circle),
   ]);
   const labels = PLOT_LAYERS.flatMap((layer) => resolved.texts.filter((t) => t.group === layer).flatMap(text));
 
+  return [...shapes, ...labels].join('\n');
+};
+
+/**
+ * A scene already laid out, as the text of a standalone `.svg` file of the given size: for an
+ * application that lays a structure out its own way and saves it as `structureSvg` saves its own.
+ */
+export const sceneSvg = (
+  resolved: Pick<ResolvedScene, 'paths' | 'circles' | 'texts'>,
+  size: { readonly width: number; readonly height: number },
+  options: SceneSvgOptions = {}
+): string => {
+  const paper = { ...PRINT_COLORS, ...options.colors }.paper;
   const svg = attrs({
     xmlns: 'http://www.w3.org/2000/svg',
-    width: fit.width,
-    height: fit.height,
-    viewBox: `0 0 ${fit.width} ${fit.height}`,
+    width: size.width,
+    height: size.height,
+    viewBox: `0 0 ${size.width} ${size.height}`,
     'font-family': options.fontFamily ?? 'Helvetica, Arial, sans-serif',
   });
   return [
     `<svg ${svg}>`,
     ...(options.title ? [`<title>${escapeXml(options.title)}</title>`] : []),
-    ...(options.background === false ? [] : [`<rect width="100%" height="100%" fill="${c('paper')}"/>`]),
-    ...shapes,
-    ...labels,
+    ...(options.background === false ? [] : [`<rect width="100%" height="100%" fill="${paper}"/>`]),
+    sceneMarkup(resolved, options),
     '</svg>',
     '',
   ].join('\n');

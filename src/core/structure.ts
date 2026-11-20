@@ -45,6 +45,7 @@ import {
   type TextBaseline,
   type TextPlacement,
   type Tone,
+  textWidth,
 } from './scene';
 import {
   glyphReach,
@@ -60,6 +61,7 @@ import { formatNumber, formatQuantity, type Unit, type Units } from './units';
 export type PlotLayer =
   | 'nodes'
   | 'nodeLabels'
+  | 'memberLabels'
   | 'dimensions'
   | 'members'
   | 'supports'
@@ -83,6 +85,7 @@ export const PLOT_LAYERS: readonly PlotLayer[] = [
   'reactions',
   'nodes',
   'nodeLabels',
+  'memberLabels',
 ];
 
 export interface TemperatureSymbols {
@@ -102,8 +105,53 @@ export interface StructureSceneOptions {
   readonly layers: ReadonlySet<PlotLayer>;
   /** Thumbnail drawing: smaller symbols, at most two values per member, magnitudes only. */
   readonly compact: boolean;
+  /**
+   * Sizes in place of the preset's (full or compact), px: an editor draws its members lighter, its
+   * arrows shorter and alike for loads and reactions, its moments as a nearly closed ring.
+   */
+  readonly sizes?: Partial<SymbolSizes>;
+  /**
+   * How loads are written. `figure` (the default): with their units, a uniform load once as
+   * `q = …`. `ends`: as an editor annotates them, bare numbers (its units shown elsewhere), and a
+   * distributed load at both its ends, zero included, as students are taught to write it.
+   */
+  readonly loadLabels?: 'figure' | 'ends';
+  /**
+   * A diagram constant along its member: its value `once`, mid-member (the default), or at both
+   * `ends`, as students are taught to annotate every segment.
+   */
+  readonly constantDiagrams?: 'once' | 'ends';
+  /**
+   * A moment the same round a rigid corner: written `once` (the default), at the member with the
+   * most room, or at `each` member's end, as students annotate every member.
+   */
+  readonly cornerValues?: 'once' | 'each';
+  /** Labels keep off the support symbols too, not only the members and arrows. */
+  readonly labelsAvoidSupports?: boolean;
+  /**
+   * Nodes no member reaches are drawn too, with their names and supports: an editor's nodes, placed
+   * before they are connected. By default a figure leaves them out.
+   */
+  readonly freeNodes?: boolean;
+  /**
+   * A distributed load with both components drawn as the two loads it was entered as (along and
+   * across the member for a local load, x and z for a global one), each with its own value, rather
+   * than as their resultant.
+   */
+  readonly splitLoads?: boolean;
+  /**
+   * Values of different diagrams on one ordinate line, written along it, stand side by side there,
+   * each half a line aside, rather than one pushed further out (see `sideBySide`).
+   */
+  readonly sideBySide?: boolean;
   readonly units: Units;
   readonly numberFormat?: Intl.NumberFormat;
+  /**
+   * Writes a displacement, given in display units. Displacements are orders of magnitude smaller
+   * than the forces, so an editor writes them its own way (a power of ten where `numberFormat`'s
+   * fixed decimals would round a deflection to zero).
+   */
+  readonly displacementText?: (value: number) => string;
   /** The temperature load's symbols, which apps write differently: the Czech EduBeam has ΔTs and ΔTd − ΔTh. */
   readonly temperatureSymbols?: TemperatureSymbols;
   /** Current scale in px per metre: spaces ordinates and load arrows evenly on screen. */
@@ -116,6 +164,19 @@ export interface StructureSceneOptions {
   readonly diagramScale?: Partial<Record<ResultLayer, number>>;
   /** M on the tension side (most of Europe); off draws it on the compression side. */
   readonly momentOnTensionSide: boolean;
+  /** Positive N on the member's dashed side (local +z); off (the default), on the other. */
+  readonly normalOnDashedSide?: boolean;
+  /** Positive V on the member's dashed side (local +z); off (the default), on the other. */
+  readonly shearOnDashedSide?: boolean;
+  /**
+   * How a diagram's area is drawn: `hatch` (the default), lines across the member as drawn by
+   * hand; `solid`, a light tint; `none`, the outline alone.
+   */
+  readonly diagramFill?: 'hatch' | 'solid' | 'none';
+  /** Write each piece's polynomial degree inside the diagram: 0°, 1°, 2°, 3°. */
+  readonly showDegrees?: boolean;
+  /** Support symbols' size, as a multiple of the preset's (the editor's support size setting). */
+  readonly supportScale?: number;
   /** The plot's font size, px: labels in a tight spot may step down from it to 10 px. */
   readonly fontSize?: number;
   /** Values upright (`horizontal`) or turned to run along their ordinate (`axis`), as in the app. */
@@ -135,10 +196,24 @@ export type ReactionLabels = 'values' | 'names';
 /** Ordinates are this far apart on screen, as in the app and the website's figures. */
 export const HATCH_SPACING_PX = 7;
 
+/**
+ * The most arrows or hatch lines one member gets, however long it is drawn: spaced in px, their
+ * number grows with the zoom, and a member drawn millions of px long (a fit's first probe) would
+ * get millions. Far more than a screen shows; a longer member spaces them wider.
+ */
+const MAX_REPEATS = 500;
+
 /** Symbol sizes in px: the website's figures, and a smaller set for thumbnails. */
 const SIZES = {
   full: {
     member: 3.5,
+    /** A hinge's circle, radius: its own size, so a lighter member keeps a readable hinge */
+    hinge: 4.5,
+    /** A moment load's arc: how far round it runs, its weight and its head */
+    arcSweep: 270,
+    arcWidth: 1.75,
+    arcHead: 8,
+    arcHeadHalf: 3.5,
     pointShaft: 3,
     pointHead: 12,
     pointHeadWidth: 14,
@@ -146,13 +221,29 @@ const SIZES = {
     udlArrow: 32,
     udlSpacing: 18,
     reaction: 46,
+    reactionShaft: 1.75,
+    reactionHead: 9,
+    reactionHeadWidth: 9,
     reactionGap: 11,
+    /** A reaction's arrow clear of a moment's ring round the same node */
+    reactionArcGap: 8,
+    /** A node's label from the node, and from it when a moment's ring surrounds it */
+    nodeLabelGap: 9,
+    arcLabelGap: 24,
+    arcLabelFirst: 24,
     arc: 15,
     reactionArc: 20,
+    /** A moment reaction's arc: a half circle on the support's side, clear of the diagrams */
+    reactionArcSweep: 190,
     deformed: 2.25,
   },
   compact: {
     member: 2.75,
+    hinge: 3.75,
+    arcSweep: 270,
+    arcWidth: 1.75,
+    arcHead: 8,
+    arcHeadHalf: 3.5,
     pointShaft: 2.25,
     pointHead: 9,
     pointHeadWidth: 10,
@@ -160,16 +251,39 @@ const SIZES = {
     udlArrow: 22,
     udlSpacing: 14,
     reaction: 32,
+    reactionShaft: 1.75,
+    reactionHead: 9,
+    reactionHeadWidth: 9,
     reactionGap: 8,
+    reactionArcGap: 8,
+    nodeLabelGap: 9,
+    arcLabelGap: 24,
+    arcLabelFirst: 24,
     arc: 11,
     reactionArc: 15,
+    reactionArcSweep: 190,
     deformed: 1.75,
   },
 } as const;
 
-type Sizes = (typeof SIZES)[keyof typeof SIZES];
+/** Every symbol's size, px: line weights, arrow lengths and heads, arcs. */
+export type SymbolSizes = { readonly [K in keyof (typeof SIZES)['full']]: number };
+type Sizes = SymbolSizes;
 
 const DIAGRAM_TONE: Record<InternalForce, Tone> = { N: 'normal', V: 'shear', M: 'moment' };
+
+/* ── What an item draws ─────────────────────────────────────────────────────────────────────── */
+
+const memberEntity = (id: string): string => `member:${id}`;
+const nodeEntity = (id: string): string => `node:${id}`;
+/** The items marked as drawing `entity`. */
+const tagged = (items: readonly SceneItem[], entity: string | undefined): SceneItem[] =>
+  entity === undefined ? [...items] : items.map((item) => ({ ...item, entity }));
+/** Marks the items pushed since `start`. */
+const tagFrom = (items: SceneItem[], start: number, entity: string | undefined): void => {
+  if (entity === undefined) return;
+  for (let i = start; i < items.length; i++) items[i] = { ...items[i], entity };
+};
 
 /* ── Vectors (screen and model share orientation: x right, y/z down) ────────────────────────── */
 
@@ -277,7 +391,12 @@ const momentArc = (
   tone: Tone,
   layer: ScenePath['layer'],
   dash?: string,
-  sweep = 270
+  sweep = 270,
+  look: { readonly width: number; readonly head: number; readonly headHalf: number } = {
+    width: 1.75,
+    head: 8,
+    headHalf: 3.5,
+  }
 ): ScenePath[] => {
   const g = Math.atan2(gap.y, gap.x);
   // Centred opposite the gap. Screen angles grow clockwise, so a counter-clockwise turn runs
@@ -290,8 +409,7 @@ const momentArc = (
   const start = p(a0);
   const end = p(a1);
   const tangent = counterClockwise ? { x: Math.sin(a1), y: -Math.cos(a1) } : { x: -Math.sin(a1), y: Math.cos(a1) };
-  const head = 8;
-  const headHalf = 3.5;
+  const { head, headHalf } = look;
   const base = { x: end.x - tangent.x * head * 0.6, y: end.y - tangent.y * head * 0.6 };
   const tip = { x: base.x + tangent.x * head, y: base.y + tangent.y * head };
   return [
@@ -300,7 +418,7 @@ const momentArc = (
       group,
       layer,
       tone,
-      width: 1.75,
+      width: look.width,
       dash,
       cap: 'butt',
       obstacle: true,
@@ -370,36 +488,39 @@ const memberItems = (model: PlotModel, frames: ReadonlyMap<string, MemberFrame>,
     const f = frameOf(frames, m.id);
     // Just clear of the member's stroke, on screen px: the same at every zoom, like the app's
     const off = size.member / 2 + FIBRE_GAP;
-    return [
-      {
-        kind: 'path',
-        group: 'members',
-        layer: LAYERS.member,
-        tone: 'ink',
-        width: size.member,
-        cap: 'round',
-        obstacle: true,
-        draw: i,
-        segments: [
-          { op: 'M', p: at(f, 0) },
-          { op: 'L', p: at(f, f.length) },
-        ],
-      },
-      {
-        kind: 'path',
-        group: 'members',
-        layer: LAYERS.member,
-        tone: 'muted',
-        width: FIBRE_WIDTH,
-        dash: FIBRE_DASH,
-        cap: 'butt',
-        fitIgnore: true,
-        segments: [
-          { op: 'M', p: at(f, 0, f.nx * off, f.nz * off) },
-          { op: 'L', p: at(f, f.length, f.nx * off, f.nz * off) },
-        ],
-      },
-    ];
+    return tagged(
+      [
+        {
+          kind: 'path',
+          group: 'members',
+          layer: LAYERS.member,
+          tone: 'ink',
+          width: size.member,
+          cap: 'round',
+          obstacle: true,
+          draw: i,
+          segments: [
+            { op: 'M', p: at(f, 0) },
+            { op: 'L', p: at(f, f.length) },
+          ],
+        },
+        {
+          kind: 'path',
+          group: 'members',
+          layer: LAYERS.member,
+          tone: 'muted',
+          width: FIBRE_WIDTH,
+          dash: FIBRE_DASH,
+          cap: 'butt',
+          fitIgnore: true,
+          segments: [
+            { op: 'M', p: at(f, 0, f.nx * off, f.nz * off) },
+            { op: 'L', p: at(f, f.length, f.nx * off, f.nz * off) },
+          ],
+        },
+      ],
+      memberEntity(m.id)
+    );
   });
 
 /**
@@ -408,7 +529,7 @@ const memberItems = (model: PlotModel, frames: ReadonlyMap<string, MemberFrame>,
  */
 const hingeItems = (model: PlotModel, frames: ReadonlyMap<string, MemberFrame>, size: Sizes): SceneItem[] => {
   const items: SceneItem[] = [];
-  const r = size.member + 1;
+  const r = size.hinge;
   for (const node of model.nodes) {
     const ends = model.members.flatMap((m): { m: PlotMember; end: 0 | 1 }[] =>
       m.start === node.id ? [{ m, end: 0 }] : m.end === node.id ? [{ m, end: 1 }] : []
@@ -426,14 +547,17 @@ const hingeItems = (model: PlotModel, frames: ReadonlyMap<string, MemberFrame>, 
       fill: 'paper',
     });
     if (ends.length - released.length <= 1) {
-      items.push(circle(anchor(node.x, node.z)));
+      items.push({ ...circle(anchor(node.x, node.z)), entity: nodeEntity(node.id) });
       continue;
     }
     for (const { m, end } of released) {
       const f = frameOf(frames, m.id);
       const sign = end === 0 ? 1 : -1;
       const off = r * 2 + 1;
-      items.push(circle(at(f, end === 0 ? 0 : f.length, sign * f.tx * off, sign * f.tz * off)));
+      items.push({
+        ...circle(at(f, end === 0 ? 0 : f.length, sign * f.tx * off, sign * f.tz * off)),
+        entity: memberEntity(m.id),
+      });
     }
   }
   return items;
@@ -445,7 +569,7 @@ const hingeItems = (model: PlotModel, frames: ReadonlyMap<string, MemberFrame>, 
  */
 const SUPPORT_WIDTH = { regular: 1.8, bold: 2.4, thin: 1.2 } as const satisfies Record<GlyphPart['weight'], number>;
 
-const supportItems = (model: PlotModel, connected: ReadonlySet<string>): SceneItem[] => {
+const supportItems = (model: PlotModel, connected: ReadonlySet<string>, obstacle = false, scale = 1): SceneItem[] => {
   const items: SceneItem[] = [];
   for (const node of model.nodes) {
     if (!connected.has(node.id)) continue;
@@ -454,7 +578,7 @@ const supportItems = (model: PlotModel, connected: ReadonlySet<string>): SceneIt
     const c = Math.cos(r);
     const s = Math.sin(r);
     for (const part of supportGlyph(placement.kind)) {
-      const pts = part.points.map(([x, y]) => anchor(node.x, node.z, x * c - y * s, x * s + y * c));
+      const pts = part.points.map(([x, y]) => anchor(node.x, node.z, scale * (x * c - y * s), scale * (x * s + y * c)));
       items.push({
         kind: 'path',
         group: 'supports',
@@ -463,6 +587,8 @@ const supportItems = (model: PlotModel, connected: ReadonlySet<string>): SceneIt
         width: SUPPORT_WIDTH[part.weight],
         fill: part.fill,
         cap: 'round',
+        obstacle,
+        entity: nodeEntity(node.id),
         segments: [
           ...pts.map((p, i): Segment => ({ op: i === 0 ? 'M' : 'L', p })),
           ...(part.closed ? [{ op: 'Z' } as const] : []),
@@ -473,7 +599,12 @@ const supportItems = (model: PlotModel, connected: ReadonlySet<string>): SceneIt
   return items;
 };
 
-const nodeItems = (model: PlotModel, connected: ReadonlySet<string>, layers: ReadonlySet<PlotLayer>): SceneItem[] => {
+const nodeItems = (
+  model: PlotModel,
+  connected: ReadonlySet<string>,
+  layers: ReadonlySet<PlotLayer>,
+  size: Sizes
+): SceneItem[] => {
   const items: SceneItem[] = [];
   for (const node of model.nodes) {
     if (!connected.has(node.id)) continue;
@@ -483,6 +614,7 @@ const nodeItems = (model: PlotModel, connected: ReadonlySet<string>, layers: Rea
         group: 'nodes',
         layer: LAYERS.hinge,
         at: anchor(node.x, node.z),
+        entity: nodeEntity(node.id),
         r: 5,
         tone: 'brand',
         width: 2,
@@ -501,11 +633,16 @@ const nodeItems = (model: PlotModel, connected: ReadonlySet<string>, layers: Rea
       const dirs = rankedDirections(used, { x: -0.7, y: -0.7 });
       // A moment arc round the node (a fixing moment, a nodal moment) would enclose a label close in
       const arcs = node.fixity.ry || model.loads.some((l) => l.kind === 'nodalMoment' && l.node === node.id);
-      const rings = arcs ? [24, 32] : [9, 22];
+      // Round a moment's ring: from `arcLabelFirst`, which may be close in - the ring is in the way
+      // only where it runs, so the label can sit in its opening, next to the node - then round it
+      const rings = arcs
+        ? [...new Set([size.arcLabelFirst, size.arcLabelGap, size.arcLabelGap + 8])]
+        : [size.nodeLabelGap, size.nodeLabelGap + 13];
       const [first, ...rest] = rings.flatMap((gap) => dirs.map((dir) => placeText(anchor(node.x, node.z), dir, gap)));
       items.push({
         kind: 'text',
         group: 'nodeLabels',
+        entity: nodeEntity(node.id),
         layer: LAYERS.label,
         text: node.id,
         tone: 'ink',
@@ -629,13 +766,31 @@ const toScreen = (f: MemberFrame, fx: number, fz: number, local: boolean): Vec =
 
 const LOAD_PRIORITY = 5;
 
+/** A distributed load's direction on screen (that of its larger end), and whether it runs along the member. */
+const distributedDirection = (
+  load: Extract<PlotLoad, { kind: 'distributed' }>,
+  f: MemberFrame
+): { d: Vec; along: boolean } | null => {
+  const q0 = toScreen(f, load.start.fx, load.start.fz, load.local);
+  const q1 = toScreen(f, load.end.fx, load.end.fz, load.local);
+  const m0 = Math.hypot(q0.x, q0.y);
+  const m1 = Math.hypot(q1.x, q1.y);
+  if (m0 === 0 && m1 === 0) return null;
+  const d = m1 > m0 ? unit(q1.x, q1.y) : unit(q0.x, q0.y);
+  return { d, along: Math.abs(d.x * f.tz - d.y * f.tx) < 0.1 };
+};
+
 const distributedItems = (
   load: Extract<PlotLoad, { kind: 'distributed' }>,
   f: MemberFrame,
   options: StructureSceneOptions,
   size: Sizes,
   fmt: (v: number, u: Unit) => string,
-  labelled = true
+  labelled = true,
+  /** How far out from the member this band starts, px: on top of the loads stacked before it */
+  offset = 0,
+  /** For a load along the member: the side of it its arrows run on, 1 for the member's +z */
+  alongSide: 1 | -1 = -1
 ): SceneItem[] => {
   const q0 = toScreen(f, load.start.fx, load.start.fz, load.local);
   const q1 = toScreen(f, load.end.fx, load.end.fz, load.local);
@@ -652,15 +807,107 @@ const distributedItems = (
   const lengthPx = f.length * options.scale;
   const items: SceneItem[] = [];
   const thin = { width: 1.25, head: 6, headWidth: 6 };
+  const atEnds = options.loadLabels === 'ends';
   const value = (v: number) =>
-    options.compact || !uniform
+    options.compact || !uniform || atEnds
       ? fmt(Math.abs(v), options.units.distributed)
       : `q = ${fmt(Math.abs(v), options.units.distributed)}`;
 
   if (Math.abs(d.x * f.tz - d.y * f.tx) < 0.1) {
+    if (atEnds) {
+      // A band beside the member, as the editor draws it: its outline as high as the value, short
+      // arrows inside it pointing along the member, its values at the band's ends
+      const n = { x: alongSide * f.nx, y: alongSide * f.nz };
+      const base = size.member / 2 + 4 + offset;
+      const BAND = 20;
+      const heightAt = (v: number) => (BAND * Math.abs(v)) / vmax;
+      const edge = (x: number, h: number) => at(f, x, n.x * (base + h), n.y * (base + h));
+      const h0 = heightAt(v0);
+      const h1 = heightAt(v1);
+      items.push({
+        kind: 'path',
+        group: 'loads',
+        layer: LAYERS.load,
+        tone: 'load',
+        width: 1.25,
+        obstacle: true,
+        segments: [
+          { op: 'M', p: edge(0, 0) },
+          { op: 'L', p: edge(0, h0) },
+          { op: 'L', p: edge(f.length, h1) },
+          { op: 'L', p: edge(f.length, 0) },
+          { op: 'Z' },
+        ],
+      });
+      items.push({
+        kind: 'path',
+        group: 'loads',
+        layer: LAYERS.load,
+        tone: 'load',
+        width: 0,
+        fill: 'tone',
+        hitArea: true,
+        fitIgnore: true,
+        segments: [
+          { op: 'M', p: edge(0, 0) },
+          { op: 'L', p: edge(0, Math.max(h0, 8)) },
+          { op: 'L', p: edge(f.length, Math.max(h1, 8)) },
+          { op: 'L', p: edge(f.length, 0) },
+          { op: 'Z' },
+        ],
+      });
+      const step = Math.max(1, Math.round(lengthPx / 30));
+      for (let i = 0; i < step; i++) {
+        const x = ((i + 0.5) * f.length) / step;
+        const v = v0 + ((v1 - v0) * x) / f.length;
+        const h = heightAt(v);
+        if (h < 6) continue;
+        const s = Math.sign(v);
+        const mid = { x: n.x * (base + h / 2), y: n.y * (base + h / 2) };
+        items.push(
+          ...arrow(
+            'loads',
+            at(f, x),
+            { x: mid.x - s * d.x * 8, y: mid.y - s * d.y * 8 },
+            { x: mid.x + s * d.x * 8, y: mid.y + s * d.y * 8 },
+            'load',
+            LAYERS.load,
+            thin
+          )
+        );
+      }
+      // Each end's value just past the band's end, along the member; when that is taken, beside the
+      // band's end, out from the member, or inside the band at its end
+      const t = { x: f.tx, y: f.tz };
+      const ends = uniform
+        ? ([[f.length, v1, h1, t]] as const)
+        : ([
+            [0, v0, h0, { x: -t.x, y: -t.y }],
+            [f.length, v1, h1, t],
+          ] as const);
+      for (const [x, v, h, dir] of ends) {
+        const middle = at(f, x, n.x * (base + Math.max(h, 8) / 2), n.y * (base + Math.max(h, 8) / 2));
+        const [first, ...rest] = [
+          placeText(middle, dir, 4),
+          placeText(edge(x, h), n, 4),
+          placeText(middle, { x: -dir.x, y: -dir.y }, -2),
+        ];
+        items.push({
+          kind: 'text',
+          group: 'loads',
+          layer: LAYERS.label,
+          text: value(v),
+          tone: 'load',
+          priority: LOAD_PRIORITY,
+          ...first,
+          alternatives: rest,
+        });
+      }
+      return items;
+    }
     // Along the member: short arrows on a line beside it.
-    const off = { x: -f.nx * 10, y: -f.nz * 10 };
-    const count = Math.max(1, Math.round(lengthPx / 30));
+    const off = { x: alongSide * f.nx * (10 + offset), y: alongSide * f.nz * (10 + offset) };
+    const count = Math.min(MAX_REPEATS, Math.max(1, Math.round(lengthPx / 30)));
     for (let i = 0; i < count; i++) {
       const x = ((i + 0.5) * f.length) / count;
       const v = v0 + ((v1 - v0) * x) / f.length;
@@ -679,26 +926,35 @@ const distributedItems = (
       );
     }
     items.push(
-      text('loads', at(f, f.length / 2, off.x, off.y), unit(-f.nx, -f.nz), 8, value(vmax), 'load', LOAD_PRIORITY)
+      text(
+        'loads',
+        at(f, f.length / 2, off.x, off.y),
+        unit(alongSide * f.nx, alongSide * f.nz),
+        8,
+        value(vmax),
+        'load',
+        LOAD_PRIORITY
+      )
     );
     return items;
   }
 
-  // Arrow tips stop short of the member's stroke, as in the website's figures.
-  const tipGap = size.member / 2 + 2;
+  // Arrow tips stop short of the member's stroke, as in the website's figures; a band stacked on
+  // another rests on its top line.
+  const tipGap = offset > 0 ? offset + 1.5 : size.member / 2 + 2;
   const lengthAt = (v: number) => (size.udlArrow * v) / vmax;
-  const count = Math.max(2, Math.round(lengthPx / size.udlSpacing));
+  const count = Math.min(MAX_REPEATS, Math.max(2, Math.round(lengthPx / size.udlSpacing)));
   for (let i = 0; i <= count; i++) {
     const x = (i * f.length) / count;
     const v = v0 + ((v1 - v0) * i) / count;
     const len = lengthAt(v);
-    if (Math.abs(len) < tipGap + 6) continue;
+    if (Math.abs(len) < size.member / 2 + 8) continue;
     const s = Math.sign(len);
     items.push(
       ...arrow(
         'loads',
         at(f, x),
-        { x: -d.x * len, y: -d.y * len },
+        { x: -d.x * (offset + len), y: -d.y * (offset + len) },
         { x: -d.x * s * tipGap, y: -d.y * s * tipGap },
         'load',
         LAYERS.load,
@@ -706,7 +962,26 @@ const distributedItems = (
       )
     );
   }
-  const tail = (x: number, v: number) => at(f, x, -d.x * lengthAt(v), -d.y * lengthAt(v));
+  const tail = (x: number, v: number) => at(f, x, -d.x * (offset + lengthAt(v)), -d.y * (offset + lengthAt(v)));
+  // The whole band, to point at: from where its arrows land to its top line
+  const foot = (x: number) => at(f, x, -d.x * offset, -d.y * offset);
+  items.push({
+    kind: 'path',
+    group: 'loads',
+    layer: LAYERS.load,
+    tone: 'load',
+    width: 0,
+    fill: 'tone',
+    hitArea: true,
+    fitIgnore: true,
+    segments: [
+      { op: 'M', p: foot(0) },
+      { op: 'L', p: tail(0, v0) },
+      { op: 'L', p: tail(f.length, v1) },
+      { op: 'L', p: foot(f.length) },
+      { op: 'Z' },
+    ],
+  });
   items.push({
     kind: 'path',
     group: 'loads',
@@ -723,20 +998,27 @@ const distributedItems = (
   const out = unit(-d.x, -d.y);
   const forwardStart: TextAlign = f.tx >= 0 ? 'start' : 'end';
   const forwardEnd: TextAlign = f.tx >= 0 ? 'end' : 'start';
-  const ends = uniform
-    ? ([[0, v0, forwardStart]] as const)
-    : ([
-        [0, v0, forwardStart],
-        [f.length, v1, forwardEnd],
-      ] as const);
-  const over = (x: number, v: number, align: TextAlign) => {
-    const placed = placeText(tail(x, v), Math.sign(v) >= 0 ? out : { x: -out.x, y: -out.y }, 6);
+  const ends =
+    uniform && !atEnds
+      ? ([[0, v0, forwardStart]] as const)
+      : ([
+          [0, v0, forwardStart],
+          [f.length, v1, forwardEnd],
+        ] as const);
+  const over = (x: number, v: number, align: TextAlign, gap = 6) => {
+    const placed = placeText(tail(x, v), Math.sign(v) >= 0 ? out : { x: -out.x, y: -out.y }, gap);
     return { ...placed, align: placed.baseline === 'middle' ? placed.align : align };
   };
   for (const [x, v, inward] of labelled ? ends : []) {
-    if (Math.abs(v) < 1e-9 * vmax) continue;
+    // A zero end is written too when every end is
+    if (Math.abs(v) < 1e-9 * vmax && !atEnds) continue;
     // Over the end of the band, reading inward (BuildSteps writes q over the beam's left end); a
     // uniform load may move to the middle or the other end when a diagram stands there.
+    // An editor writes each end's value just outside the band, beside its top line (the start's
+    // before the band, the end's past it), so stacked bands read as a column of values; over the
+    // band's end when that is taken
+    const outward = x === 0 ? { x: -f.tx, y: -f.tz } : { x: f.tx, y: f.tz };
+    const outside = placeText(tail(x, v), outward, 4);
     items.push({
       kind: 'text',
       group: 'loads',
@@ -744,16 +1026,35 @@ const distributedItems = (
       text: value(v),
       tone: 'load',
       priority: LOAD_PRIORITY,
-      ...over(x, v, inward),
+      ...(atEnds ? outside : over(x, v, inward)),
       // On an inclined member the band runs up or down beside the text: either alignment at either end
-      alternatives: uniform
-        ? [
-            over(f.length / 2, v, 'middle'),
-            over(f.length, v, forwardEnd),
-            over(0, v, forwardEnd),
-            over(f.length, v, forwardStart),
-          ]
-        : [],
+      alternatives:
+        uniform && !atEnds
+          ? [
+              over(f.length / 2, v, 'middle'),
+              over(f.length, v, forwardEnd),
+              over(0, v, forwardEnd),
+              over(f.length, v, forwardStart),
+            ]
+          : atEnds
+            ? [
+                // Over the end, then the corner above it outside, then a little in along the band:
+                // always by the end it belongs to
+                over(x, v, inward),
+                placeText(
+                  tail(x, v),
+                  unit(
+                    outward.x + (Math.sign(v) >= 0 ? out : { x: -out.x, y: -out.y }).x,
+                    outward.y + (Math.sign(v) >= 0 ? out : { x: -out.x, y: -out.y }).y
+                  ),
+                  4
+                ),
+                over(x, v, inward, 16),
+                over(x === 0 ? 0.08 * f.length : 0.92 * f.length, v0 + (v1 - v0) * (x === 0 ? 0.08 : 0.92), inward),
+                over(x === 0 ? 0.16 * f.length : 0.84 * f.length, v0 + (v1 - v0) * (x === 0 ? 0.16 : 0.84), inward),
+              ]
+            : // Further out over the same end when crowded: never along the member, away from it
+              [over(x, v, inward, 16), over(x, v, inward, 28)],
     });
   }
   return items;
@@ -765,7 +1066,8 @@ const pointForceItems = (
   content: string,
   size: Sizes,
   gap: number,
-  pull = false
+  pull = false,
+  bold = true
 ): SceneItem[] => {
   const d = unit(force.x, force.y);
   // Pushing: the arrow comes in towards the point. Pulling: it hangs off the point, pointing away.
@@ -790,7 +1092,7 @@ const pointForceItems = (
     }),
     {
       ...text('loads', shift(origin, end.x, end.y), pull ? d : { x: -d.x, y: -d.y }, 5, content, 'load', LOAD_PRIORITY),
-      weight: 600,
+      weight: bold ? 600 : undefined,
     },
   ];
 };
@@ -818,7 +1120,11 @@ const pointMomentItems = (
     placeText(shift(origin, dir.x * size.arc, dir.y * size.arc), dir, 4)
   );
   return [
-    ...momentArc('loads', origin, size.arc, my > 0, gap, 'load', LAYERS.load),
+    ...momentArc('loads', origin, size.arc, my > 0, gap, 'load', LAYERS.load, undefined, size.arcSweep, {
+      width: size.arcWidth,
+      head: size.arcHead,
+      headHalf: size.arcHeadHalf,
+    }),
     {
       kind: 'text',
       group: 'loads',
@@ -979,6 +1285,19 @@ const continuesLoad = (
   });
 };
 
+/** A distributed load with both components, as its two components: each a load of its own. */
+const splitComponents = (load: PlotLoad): PlotLoad[] => {
+  if (load.kind !== 'distributed') return [load];
+  const { start, end } = load;
+  const hasX = start.fx !== 0 || end.fx !== 0;
+  const hasZ = start.fz !== 0 || end.fz !== 0;
+  if (!hasX || !hasZ) return [load];
+  return [
+    { ...load, start: { fx: 0, fz: start.fz }, end: { fx: 0, fz: end.fz } },
+    { ...load, start: { fx: start.fx, fz: 0 }, end: { fx: end.fx, fz: 0 } },
+  ];
+};
+
 const loadItems = (
   model: PlotModel,
   frames: ReadonlyMap<string, MemberFrame>,
@@ -990,7 +1309,23 @@ const loadItems = (
   const items: SceneItem[] = [];
   const { units } = options;
   const gap = size.member / 2 + 2;
-  for (const load of model.loads) {
+  /*
+   * Loads of one member or node that push the same way are stacked, as a textbook draws them: a
+   * band on top of the one before, a point load's arrow beyond the last one's value.
+   */
+  const stacks = new Map<string, { d: Vec; offset: number }[]>();
+  const stackOn = (key: string, d: Vec, height: number): number => {
+    const list = stacks.get(key) ?? [];
+    const same = list.filter((e) => e.d.x * d.x + e.d.y * d.y > 0.95);
+    const offset = same.reduce((sum, e) => sum + e.offset, 0);
+    list.push({ d, offset: height });
+    stacks.set(key, list);
+    return offset;
+  };
+  const pointStep = size.pointArrow + (options.fontSize ?? 13) + 10;
+  const loads = options.splitLoads ? model.loads.flatMap(splitComponents) : model.loads;
+  for (const load of loads) {
+    const start = items.length;
     switch (load.kind) {
       case 'nodalForce': {
         const node = nodes.get(load.node);
@@ -999,8 +1334,17 @@ const loadItems = (
           // A load at a truss's bottom chord pushes down along the vertical above it: hang it below instead
           const d = unit(load.fx, load.fz);
           const pull = memberAlong(model, frames, node, { x: -d.x, y: -d.y }) && !memberAlong(model, frames, node, d);
+          const along = stackOn(`node:${load.node}`, pull ? { x: -d.x, y: -d.y } : d, pointStep);
           items.push(
-            ...pointForceItems(anchor(node.x, node.z), { x: load.fx, y: load.fz }, content, size, gap + 1, pull)
+            ...pointForceItems(
+              anchor(node.x, node.z),
+              { x: load.fx, y: load.fz },
+              content,
+              size,
+              gap + 1 + along,
+              pull,
+              options.loadLabels !== 'ends'
+            )
           );
         }
         break;
@@ -1021,15 +1365,45 @@ const loadItems = (
       }
       case 'distributed': {
         const f = frames.get(load.member);
-        if (f) items.push(...distributedItems(load, f, options, size, fmt, !continuesLoad(model, frames, load)));
+        const dir = f ? distributedDirection(load, f) : null;
+        if (f && dir) {
+          // A load along the member takes the side its bands leave free (they stand on -z when they push +z)
+          const banded = loads.some((other) => {
+            if (other.kind !== 'distributed' || other.member !== load.member) return false;
+            const o = distributedDirection(other, f);
+            return o !== null && !o.along && o.d.x * f.nx + o.d.y * f.nz > 0;
+          });
+          const side: 1 | -1 = banded ? 1 : -1;
+          const offset = dir.along
+            ? // Lines of arrows along the member stack whichever way they point
+              stackOn(`along:${load.member}`, { x: 1, y: 0 }, options.loadLabels === 'ends' ? 26 : 14)
+            : // Bands on one side of the member stack, however their arrows slant
+              stackOn(
+                `member:${load.member}:${dir.d.x * f.nx + dir.d.y * f.nz > 0 ? 'z' : '-z'}`,
+                { x: 1, y: 0 },
+                size.udlArrow + 2
+              );
+          items.push(
+            ...distributedItems(load, f, options, size, fmt, !continuesLoad(model, frames, load), offset, side)
+          );
+        }
         break;
       }
       case 'pointForce': {
         const f = frames.get(load.member);
         if (f) {
           const force = toScreen(f, load.fx, load.fz, load.local);
+          const along = stackOn(`point:${load.member}:${load.at.toFixed(6)}`, unit(force.x, force.y), pointStep);
           items.push(
-            ...pointForceItems(at(f, load.at), force, fmt(Math.hypot(load.fx, load.fz), units.force), size, gap)
+            ...pointForceItems(
+              at(f, load.at),
+              force,
+              fmt(Math.hypot(load.fx, load.fz), units.force),
+              size,
+              gap + along,
+              false,
+              options.loadLabels !== 'ends'
+            )
           );
         }
         break;
@@ -1056,6 +1430,7 @@ const loadItems = (
         break;
       }
     }
+    tagFrom(items, start, load.source);
   }
   return items;
 };
@@ -1069,7 +1444,8 @@ const NAME_PRIORITY = 10;
 /**
  * Reactions as forces on the structure, clear of the support as BuildSteps draws them. One along
  * the support's ground direction stands beyond the symbol, pointing at it when it pushes; one
- * across it lies just under the symbol's base, on the side it pushes from.
+ * across it stands beside the symbol on the node's own line, pushing in from the side the force
+ * comes from, or pulling out on the other side when a member is in the way. Each one aims at its node.
  */
 /**
  * The reactions of an exercise, before it is solved: one for every restrained direction, with a
@@ -1093,7 +1469,12 @@ const reactionItems = (
   const nodes = nodeMap(model);
   const byNode = new Map<string, PlotReaction[]>();
   for (const r of reactions) if (r.value !== 0) byNode.set(r.node, [...(byNode.get(r.node) ?? []), r]);
-  const style = { width: 1.75, head: 9, headWidth: 9, obstacle: true };
+  const style = {
+    width: size.reactionShaft,
+    head: size.reactionHead,
+    headWidth: size.reactionHeadWidth,
+    obstacle: true,
+  };
   const names = options.reactionLabels === 'names';
   const priority = names ? NAME_PRIORITY : REACTION_PRIORITY;
   // A result, so a bare number like the diagrams' values; only given quantities carry units. Or,
@@ -1116,6 +1497,7 @@ const reactionItems = (
   for (const [id, list] of byNode) {
     const node = nodes.get(id);
     if (!node) continue;
+    const start = items.length;
     const origin = anchor(node.x, node.z);
     const placement = supportPlacement(model, node);
     const ground = groundDirection(placement.rotation);
@@ -1124,10 +1506,17 @@ const reactionItems = (
     const across = { x: g.y, y: -g.x };
     const m = memberDirections(model, node);
     const used: Vec[] = Math.hypot(m.x, m.z) > 1e-9 ? [unit(m.x, m.z)] : [];
+    // Each member's direction away from the node
+    const members: Vec[] = model.members.flatMap((mm) => {
+      const other = mm.start === id ? mm.end : mm.end === id ? mm.start : null;
+      const o = other === null ? undefined : nodes.get(other);
+      return o && Math.hypot(o.x - node.x, o.z - node.z) > 1e-12 ? [unit(o.x - node.x, o.z - node.z)] : [];
+    });
     const moment = list.find((r) => r.dof === 'ry');
     const arcR = size.reactionArc;
-    const reach = glyphReach(placement.kind, placement.rotation, g.x, g.y);
-    const clear = moment ? arcR + 8 : 0;
+    const supportScale = options.supportScale ?? 1;
+    const reach = supportScale * glyphReach(placement.kind, placement.rotation, g.x, g.y);
+    const clear = moment ? arcR + size.reactionArcGap : 0;
 
     for (const r of list) {
       if (r.dof === 'ry') continue;
@@ -1165,37 +1554,59 @@ const reactionItems = (
         });
         used.push(g);
       } else {
-        // Under the symbol's base, entering from the side the force comes from.
-        const down = Math.max(reach + (options.compact ? 4 : 6), clear);
-        const from = fd.x * across.x + fd.y * across.y > 0 ? -1 : 1;
-        const o = { x: g.x * down, y: g.y * down };
-        const tail = {
-          x: o.x + across.x * from * (14 + size.reaction - 4),
-          y: o.y + across.y * from * (14 + size.reaction - 4),
-        };
-        const tip = { x: o.x + across.x * from * 14, y: o.y + across.y * from * 14 };
-        items.push(...arrow('reactions', origin, tail, tip, 'reaction', LAYERS.reaction, style));
-        const out = unit(tail.x - tip.x, tail.y - tip.y);
-        const mid = { x: (tail.x + tip.x) / 2, y: (tail.y + tip.y) / 2 };
+        // On the node's own line of action, as every reaction: pushing in from the side the force
+        // comes from, or pulling out on the other side when a member takes that one.
+        const taken = (d: Vec) => members.some((u) => u.x * d.x + u.y * d.y > 0.9);
+        const behind = { x: -fd.x, y: -fd.y };
+        const pushes = !taken(behind) || taken(fd);
+        const side = pushes ? behind : fd;
+        const near = Math.max(
+          supportScale * glyphReach(placement.kind, placement.rotation, side.x, side.y) + size.reactionGap,
+          clear
+        );
+        const far = near + size.reaction;
+        const pNear = { x: side.x * near, y: side.y * near };
+        const pFar = { x: side.x * far, y: side.y * far };
+        items.push(
+          ...arrow(
+            'reactions',
+            origin,
+            pushes ? pFar : pNear,
+            pushes ? pNear : pFar,
+            'reaction',
+            LAYERS.reaction,
+            style
+          )
+        );
+        // The value past the tail, then beside the arrow's middle on either side
+        const mid = shift(origin, (pNear.x + pFar.x) / 2, (pNear.y + pFar.y) / 2);
+        const perp = { x: -side.y, y: side.x };
         items.push({
-          ...text('reactions', shift(origin, tail.x, tail.y), out, 4, value.text, 'reaction', priority),
+          ...text('reactions', shift(origin, pFar.x, pFar.y), side, 4, value.text, 'reaction', priority),
           ...value,
-          // Under the arrow, then over it, when the diagram or another value stands past its tail
-          alternatives: [
-            placeText(shift(origin, mid.x, mid.y), g, 5),
-            placeText(shift(origin, mid.x, mid.y), { x: -g.x, y: -g.y }, 5),
-          ],
+          alternatives: [placeText(mid, perp, 5), placeText(mid, { x: -perp.x, y: -perp.y }, 5)],
         });
-        used.push({ x: across.x * from, y: across.y * from });
+        used.push(side);
       }
     }
 
     if (moment) {
       const gap = used[0] ?? { x: 0, y: -1 };
-      // A half circle on the support's side only: a fuller arc reaches round into the diagrams
-      // that start at this node.
+      // By default a half circle on the support's side only, as a fuller arc reaches round into the
+      // diagrams that start at this node; an editor may draw its ring (`reactionArcSweep`).
       items.push(
-        ...momentArc('reactions', origin, arcR, moment.value > 0, gap, 'reaction', LAYERS.reaction, undefined, 190)
+        ...momentArc(
+          'reactions',
+          origin,
+          arcR,
+          moment.value > 0,
+          gap,
+          'reaction',
+          LAYERS.reaction,
+          undefined,
+          size.reactionArcSweep,
+          { width: size.arcWidth, head: size.arcHead, headHalf: size.arcHeadHalf }
+        )
       );
       // Off the arc, in the first free direction that also keeps clear of the members at the node
       const along = memberDirections(model, node);
@@ -1221,6 +1632,7 @@ const reactionItems = (
         alternatives: rest,
       });
     }
+    tagFrom(items, start, nodeEntity(id));
   }
   return items;
 };
@@ -1228,8 +1640,14 @@ const reactionItems = (
 /* ── Diagrams ───────────────────────────────────────────────────────────────────────────────── */
 
 /** Which way a positive value is drawn, along the member's local z: +1 toward local +z. */
-export const diagramSide = (q: InternalForce, momentOnTensionSide: boolean): 1 | -1 =>
-  q === 'M' ? (momentOnTensionSide ? 1 : -1) : -1;
+export const diagramSide = (
+  q: InternalForce,
+  momentOnTensionSide: boolean,
+  dashed: { readonly normalOnDashedSide?: boolean; readonly shearOnDashedSide?: boolean } = {}
+): 1 | -1 => {
+  if (q === 'M') return momentOnTensionSide ? 1 : -1;
+  return (q === 'N' ? dashed.normalOnDashedSide : dashed.shearOnDashedSide) ? 1 : -1;
+};
 
 const pieceSegments = (f: MemberFrame, piece: Piece, k: number, normal: Vec): Segment[] =>
   pieceToBeziers(piece).map(([, c1, c2, p]) => ({
@@ -1240,6 +1658,57 @@ const pieceSegments = (f: MemberFrame, piece: Piece, k: number, normal: Vec): Se
   }));
 
 /** The outline and the ordinates of one member's diagram. */
+/**
+ * Each piece's polynomial degree, 0° to 3°, written inside the diagram halfway out from the axis,
+ * or just outside it where the diagram is too thin for the text, as a student marks a diagram.
+ */
+const degreeLabels = (
+  q: InternalForce,
+  f: MemberFrame,
+  pw: Piecewise,
+  k: number,
+  normal: Vec,
+  options: StructureSceneOptions
+): SceneItem[] => {
+  const fontSize = options.fontSize ?? 13;
+  const largest = Math.max(0, ...pw.flatMap((p) => p.c.map(Math.abs)));
+  if (!(largest > 0)) return [];
+  return pw.flatMap((piece): SceneItem[] => {
+    // The highest power that is more than round-off (the coefficients are per unit of s in [0, 1])
+    let degree = -1;
+    for (let i = piece.c.length - 1; i >= 0; i--) {
+      if (Math.abs(piece.c[i]) > 1e-6 * largest) {
+        degree = i;
+        break;
+      }
+    }
+    if (degree < 0 || (piece.x1 - piece.x0) * options.scale < fontSize * 1.5) return [];
+    // A degree belongs to the whole piece, not a point: when another diagram's mark stands at the
+    // middle, it slides along the piece
+    const places = [0.5, 0.35, 0.65, 0.25, 0.75].map((t): TextPlacement => {
+      const x = piece.x0 + t * (piece.x1 - piece.x0);
+      const v = evalPiece(piece, x);
+      const reach = Math.abs(v * k);
+      const out = Math.sign(v) || 1;
+      const fromAxis = reach >= 2 * fontSize ? (v * k) / 2 : v * k + out * fontSize * 0.9;
+      return { at: at(f, x, normal.x * fromAxis, normal.y * fromAxis), align: 'middle', baseline: 'middle' };
+    });
+    const [first, ...rest] = places;
+    return [
+      {
+        kind: 'text',
+        group: q,
+        layer: LAYERS.label,
+        text: `${degree}°`,
+        tone: DIAGRAM_TONE[q],
+        priority: 4,
+        ...first,
+        alternatives: rest,
+      },
+    ];
+  });
+};
+
 const diagramShape = (
   group: PlotLayer,
   f: MemberFrame,
@@ -1248,7 +1717,8 @@ const diagramShape = (
   k: number,
   normal: Vec,
   scale: number,
-  closed: readonly [boolean, boolean]
+  closed: readonly [boolean, boolean],
+  fill: 'hatch' | 'solid' | 'none' = 'hatch'
 ): SceneItem[] => {
   const outline: Segment[] = [];
   pw.forEach((piece, i) => {
@@ -1267,20 +1737,45 @@ const diagramShape = (
   });
   if (closed[1]) outline.push({ op: 'L', p: at(f, f.length) });
 
+  const items: SceneItem[] = [
+    { kind: 'path', group, layer: LAYERS.diagramLine, tone, width: 1.75, segments: outline, shield: true },
+  ];
+  if (fill === 'none') return items;
+  if (fill === 'solid') {
+    // The area between the axis and the outline, closed to the axis at both ends whatever the outline does
+    const area: Segment[] = [{ op: 'M', p: at(f, 0) }];
+    pw.forEach((piece) => {
+      const v0 = evalPiece(piece, piece.x0);
+      area.push({ op: 'L', p: at(f, piece.x0, normal.x * k * v0, normal.y * k * v0) });
+      area.push(...pieceSegments(f, piece, k, normal));
+    });
+    area.push({ op: 'L', p: at(f, f.length) }, { op: 'Z' });
+    items.push({
+      kind: 'path',
+      group,
+      layer: LAYERS.diagramFill,
+      tone,
+      width: 0,
+      fill: 'tone',
+      fillOpacity: 0.12,
+      fitIgnore: true,
+      segments: area,
+    });
+    return items;
+  }
+
   const lengthPx = f.length * scale;
-  const count = Math.floor(lengthPx / HATCH_SPACING_PX);
-  const startPx = (lengthPx - count * HATCH_SPACING_PX) / 2;
+  const spacing = Math.max(HATCH_SPACING_PX, lengthPx / MAX_REPEATS);
+  const count = Math.floor(lengthPx / spacing);
+  const startPx = (lengthPx - count * spacing) / 2;
   const hatch: Segment[] = [];
   for (let i = 0; i <= count; i++) {
-    const x = (startPx + i * HATCH_SPACING_PX) / scale;
+    const x = (startPx + i * spacing) / scale;
     const v = valueAt(pw, x);
     if (Math.abs(v * k) < 1.5) continue;
     hatch.push({ op: 'M', p: at(f, x) }, { op: 'L', p: at(f, x, normal.x * k * v, normal.y * k * v) });
   }
 
-  const items: SceneItem[] = [
-    { kind: 'path', group, layer: LAYERS.diagramLine, tone, width: 1.75, segments: outline, shield: true },
-  ];
   if (hatch.length > 0) {
     items.push({
       kind: 'path',
@@ -1304,22 +1799,90 @@ interface LabelCandidate {
   readonly magnitude: number;
 }
 
+/** How far each of two values side by side stands off their shared ordinate line, px */
+const FLANK_PX = 1;
+
+/**
+ * Values of different diagrams on one ordinate line - the same point of a member, the same way out
+ * - that would run into each other along it, written along the line: the two stand side by side,
+ * each half a line aside, meeting at the line, rather than one pushed further out. Each keeps its
+ * usual places after that, and the side by side places may cross the other diagram's outline.
+ */
+const sideBySide = (values: readonly SceneText[], fontSize: number): SceneText[] => {
+  const line = (t: SceneText) => {
+    const length = Math.hypot(t.at.dx, t.at.dy);
+    if (t.rotate === undefined || !(length > 0)) return null;
+    const along = textWidth(t.text, t.size ?? fontSize);
+    return { ux: t.at.dx / length, uy: t.at.dy / length, from: length, to: length + along };
+  };
+  const flank = (t: SceneText, sign: 1 | -1): SceneText => {
+    const r = ((t.rotate ?? 0) * Math.PI) / 180;
+    // The text's own down, turned (see tipPlacements)
+    const side = { x: -Math.sin(r) * FLANK_PX * sign, y: Math.cos(r) * FLANK_PX * sign };
+    const own: TextPlacement = { at: t.at, align: t.align, baseline: t.baseline, rotate: t.rotate };
+    return {
+      ...t,
+      at: shift(t.at, side.x, side.y),
+      baseline: sign > 0 ? 'top' : 'bottom',
+      acrossDiagrams: true,
+      alternatives: [own, ...(t.alternatives ?? [])],
+    };
+  };
+  const out = [...values];
+  const paired = new Set<number>();
+  for (let i = 0; i < out.length; i++) {
+    const a = line(out[i]);
+    if (!a || paired.has(i)) continue;
+    for (let j = i + 1; j < out.length; j++) {
+      const b = line(out[j]);
+      if (!b || paired.has(j) || out[i].group === out[j].group) continue;
+      const sameLine =
+        Math.abs(out[i].at.x - out[j].at.x) < 1e-9 &&
+        Math.abs(out[i].at.z - out[j].at.z) < 1e-9 &&
+        a.ux * b.ux + a.uy * b.uy > 0.999;
+      if (!sameLine || a.from >= b.to + 2 || b.from >= a.to + 2) continue;
+      out[i] = flank(out[i], -1);
+      out[j] = flank(out[j], 1);
+      paired.add(i).add(j);
+      break;
+    }
+  }
+  return out;
+};
+
 /**
  * Where a value goes: just beyond the tip of the ordinate it denotes, along that ordinate, so it
  * reads as the ordinate's continuation. With `axis` the text turns to run along the ordinate
  * (across the member), as the app writes it, never upside down. Each further place moves it
  * outward along the same ordinate - it never leaves its tip.
  */
-export const tipPlacements = (tip: Anchor, out: Vec, mode: ResultLabelMode, gaps = [5, 11, 17]): TextPlacement[] =>
+export const tipPlacements = (
+  tip: Anchor,
+  out: Vec,
+  mode: ResultLabelMode,
+  gaps: readonly number[] = [5, 11, 17],
+  asides: readonly number[] = [4]
+): TextPlacement[] =>
   gaps.flatMap((gap): TextPlacement[] => {
     if (mode === 'horizontal') {
       const p = placeText(tip, out, gap);
       // Still hanging from the tip, but reaching to one side of it: clear of a member that meets
       // the ordinate there, as a column does under a beam's corner value.
       // A few pixels aside, so the text does not start right on the member it clears.
-      return p.baseline === 'middle'
-        ? [p, { ...p, at: shift(p.at, 0, 4), baseline: 'top' }, { ...p, at: shift(p.at, 0, -4), baseline: 'bottom' }]
-        : [p, { ...p, at: shift(p.at, 4, 0), align: 'start' }, { ...p, at: shift(p.at, -4, 0), align: 'end' }];
+      return [
+        p,
+        ...asides.flatMap((d): TextPlacement[] =>
+          p.baseline === 'middle'
+            ? [
+                { ...p, at: shift(p.at, 0, d), baseline: 'top' },
+                { ...p, at: shift(p.at, 0, -d), baseline: 'bottom' },
+              ]
+            : [
+                { ...p, at: shift(p.at, d, 0), align: 'start' },
+                { ...p, at: shift(p.at, -d, 0), align: 'end' },
+              ]
+        ),
+      ];
     }
     let angle = (Math.atan2(out.y, out.x) * 180) / Math.PI;
     // Across a horizontal member the text reads upward, as the app turns it.
@@ -1335,11 +1898,15 @@ export const tipPlacements = (tip: Anchor, out: Vec, mode: ResultLabelMode, gaps
       rotate: angle,
     };
     // Beside the ordinate's line instead of on it: the text's own up and down, turned.
-    const side = { x: -Math.sin(r) * 4, y: Math.cos(r) * 4 };
     return [
       p,
-      { ...p, at: shift(p.at, side.x, side.y), baseline: 'top' },
-      { ...p, at: shift(p.at, -side.x, -side.y), baseline: 'bottom' },
+      ...asides.flatMap((d): TextPlacement[] => {
+        const side = { x: -Math.sin(r) * d, y: Math.cos(r) * d };
+        return [
+          { ...p, at: shift(p.at, side.x, side.y), baseline: 'top' },
+          { ...p, at: shift(p.at, -side.x, -side.y), baseline: 'bottom' },
+        ];
+      }),
     ];
   });
 
@@ -1361,6 +1928,10 @@ const diagramLabels = (
   const unitOf = q === 'M' ? options.units.moment : options.units.force;
   const tone = DIAGRAM_TONE[q];
   const mode = options.resultLabelMode ?? 'horizontal';
+  // Further out along its own ordinate only, and not far: moved along the member, a value would
+  // stand by another point of the diagram, and far out it reads as nobody's. The 4 px aside only
+  // clears a member meeting the tip. A value with no room near its tip is left out.
+  const spots = (tip: Anchor, out: Vec, m: ResultLabelMode): TextPlacement[] => tipPlacements(tip, out, m);
   const largest = Math.max(0, ...model.members.map((m) => maxAbs(results[m.id]?.[q] ?? [])));
   if (!(largest > 0)) return [];
   const zero = 1e-6 * largest;
@@ -1372,6 +1943,8 @@ const diagramLabels = (
   const normalOf = (f: MemberFrame): Vec => ({ x: f.nx * side, y: f.nz * side });
   const isConstant = (pw: Piecewise) =>
     pw.every((p) => (pieceDegree(p) ?? 0) === 0 && close(evalPiece(p, p.x0), evalPiece(pw[0], pw[0].x0)));
+  // Written once mid-member, or at its ends as any other diagram
+  const once = (pw: Piecewise) => options.constantDiagrams !== 'ends' && isConstant(pw);
 
   const push = (places: readonly TextPlacement[], content: string, v: number, members: string[]) => {
     // A value that rounds to nothing in the chosen format (solver noise at a free end) is not written
@@ -1398,7 +1971,7 @@ const diagramLabels = (
     const ends = model.members.flatMap((m) => {
       const pw = results[m.id]?.[q];
       const f = frames.get(m.id);
-      if (!pw || pw.length === 0 || !f || isConstant(pw)) return [];
+      if (!pw || pw.length === 0 || !f || once(pw)) return [];
       const end = m.start === node.id ? 0 : m.end === node.id ? 1 : -1;
       if (end === -1) return [];
       const x = end === 0 ? 0 : f.length;
@@ -1422,13 +1995,18 @@ const diagramLabels = (
 
     // A moment is continuous round a rigid joint: one value, written once. A shear or normal force of
     // the same size on both sides of a support is a step, and both its values are written.
-    if (q === 'M' && ends.length >= 2 && ends.every((e) => close(Math.abs(e.v), Math.abs(ends[0].v)))) {
+    if (
+      q === 'M' &&
+      options.cornerValues !== 'each' &&
+      ends.length >= 2 &&
+      ends.every((e) => close(Math.abs(e.v), Math.abs(ends[0].v)))
+    ) {
       // One value for the joint. The ordinate that points along another member is crowded by that
       // member's own diagram; the one pointing away from every other member has the room.
       const crowding = (e: (typeof ends)[number]) =>
         Math.max(-1, ...ends.filter((o) => o !== e).map((o) => e.out.x * o.away.x + e.out.y * o.away.y));
       const ranked = [...ends].sort((a, b) => crowding(a) - crowding(b) || Math.abs(b.f.tx) - Math.abs(a.f.tx));
-      const places = ranked.flatMap((e) => tipPlacements(e.tip, e.out, mode));
+      const places = ranked.flatMap((e) => spots(e.tip, e.out, mode));
       const shown = ranked[0].v;
       push(
         places,
@@ -1438,7 +2016,25 @@ const diagramLabels = (
       );
       continue;
     }
-    for (const e of ends) push(tipPlacements(e.tip, e.out, mode), number(e.v), e.v, [e.m.id]);
+    // A diagram running straight on through the node with the same value is one value, written once
+    // (at the first member's tip, the other's in reserve); members at an angle keep one each
+    const written = new Set<(typeof ends)[number]>();
+    for (const e of ends) {
+      if (written.has(e)) continue;
+      const on = ends.find(
+        (o) =>
+          o !== e &&
+          !written.has(o) &&
+          e.away.x * o.away.x + e.away.y * o.away.y < -0.995 &&
+          close(e.v, o.v) &&
+          e.out.x * o.out.x + e.out.y * o.out.y > 0.995
+      );
+      written.add(e);
+      if (on) {
+        written.add(on);
+        push([...spots(e.tip, e.out, mode), ...spots(on.tip, on.out, mode)], number(e.v), e.v, [e.m.id, on.m.id]);
+      } else push(spots(e.tip, e.out, mode), number(e.v), e.v, [e.m.id]);
+    }
   }
 
   // Along each member.
@@ -1450,9 +2046,10 @@ const diagramLabels = (
     const tipAt = (x: number, v: number) => at(f, x, n.x * k * v, n.y * k * v);
     const outOf = (v: number) => ({ x: n.x * Math.sign(v), y: n.y * Math.sign(v) });
     if (isConstant(pw)) {
+      if (!once(pw)) continue;
       const v = evalPiece(pw[0], pw[0].x0);
       // Mid-member, or a quarter of the way along either way when a load's value stands there
-      const along = [0.5, 0.25, 0.75].flatMap((t) => tipPlacements(tipAt(f.length * t, v), outOf(v), mode));
+      const along = [0.5, 0.25, 0.75].flatMap((t) => spots(tipAt(f.length * t, v), outOf(v), mode));
       if (Math.abs(v) > zero) push(along, number(v), v, [m.id]);
       continue;
     }
@@ -1460,18 +2057,18 @@ const diagramLabels = (
       const left = valueAt(pw, b, 'left');
       const right = valueAt(pw, b, 'right');
       if (close(left, right)) {
-        if (Math.abs(left) > zero) push(tipPlacements(tipAt(b, left), outOf(left), mode), number(left), left, [m.id]);
+        if (Math.abs(left) > zero) push(spots(tipAt(b, left), outOf(left), mode), number(left), left, [m.id]);
         continue;
       }
       // A step: both tips, the value just before and just after.
       for (const v of [left, right]) {
-        if (Math.abs(v) > zero) push(tipPlacements(tipAt(b, v), outOf(v), mode), number(v), v, [m.id]);
+        if (Math.abs(v) > zero) push(spots(tipAt(b, v), outOf(v), mode), number(v), v, [m.id]);
       }
     }
     for (const p of pw) {
       for (const x of pieceExtrema(p)) {
         const v = evalPiece(p, x);
-        if (Math.abs(v) > zero) push(tipPlacements(tipAt(x, v), outOf(v), mode), number(v), v, [m.id]);
+        if (Math.abs(v) > zero) push(spots(tipAt(x, v), outOf(v), mode), number(v), v, [m.id]);
       }
     }
   }
@@ -1564,7 +2161,7 @@ const barForceLabels = (
           Math.abs(o.mid.z - bar.mid.z) < 1e-6 * span
       );
 
-  return bars.map(({ f, v }, i): SceneItem => {
+  return bars.map(({ m, f, v }, i): SceneItem => {
     let angle = (Math.atan2(f.tz, f.tx) * 180) / Math.PI;
     if (angle > 90) angle -= 180;
     if (angle <= -90) angle += 180;
@@ -1596,6 +2193,7 @@ const barForceLabels = (
     return {
       kind: 'text',
       group: 'N',
+      entity: memberEntity(m.id),
       layer: LAYERS.label,
       // Tension red, compression blue, as a truss is read at a glance
       tone: v > 0 ? 'tension' : v < 0 ? 'compression' : 'normal',
@@ -1607,6 +2205,52 @@ const barForceLabels = (
     };
   });
 };
+
+/**
+ * Each member's name along it, at mid-length on the side away from its dashed fibres, as the app
+ * writes it. Never upside down. Below every value in priority: when crowded, it slides along the
+ * member, then crosses to the fibres' side, and gives way last.
+ */
+const MEMBER_LABEL_PRIORITY = 3;
+const memberLabelItems = (model: PlotModel, frames: ReadonlyMap<string, MemberFrame>, size: Sizes): SceneItem[] =>
+  model.members.flatMap((m): SceneItem[] => {
+    const f = frames.get(m.id);
+    if (!f) return [];
+    let angle = (Math.atan2(f.tz, f.tx) * 180) / Math.PI;
+    if (angle > 90) angle -= 180;
+    if (angle <= -90) angle += 180;
+    const r = (angle * Math.PI) / 180;
+    // "Up" as the text reads, whichever way the member was drawn
+    const up = { x: Math.sin(r), y: -Math.cos(r) };
+    // The fibres lie on local +z, (nx, nz): the name goes to the other side first
+    const away = f.nx * up.x + f.nz * up.y > 0 ? -1 : 1;
+    const gap = size.member / 2 + 3;
+    const places: TextPlacement[] = [];
+    for (const side of [away, -away]) {
+      for (const t of [0.5, 0.4, 0.6, 0.3, 0.7, 0.2, 0.8]) {
+        places.push({
+          at: at(f, f.length * t, up.x * gap * side, up.y * gap * side),
+          align: 'middle',
+          baseline: side > 0 ? 'bottom' : 'top',
+        });
+      }
+    }
+    const [first, ...rest] = places;
+    return [
+      {
+        kind: 'text',
+        group: 'memberLabels',
+        entity: memberEntity(m.id),
+        layer: LAYERS.label,
+        tone: 'ink',
+        text: m.id,
+        ...first,
+        priority: MEMBER_LABEL_PRIORITY,
+        rotate: angle,
+        alternatives: rest,
+      },
+    ];
+  });
 
 /** In a thumbnail, each member keeps its two largest values; a corner counts for both members. */
 const limitPerMember = (candidates: readonly LabelCandidate[], limit: number): LabelCandidate[] => {
@@ -1743,22 +2387,27 @@ export const defaultResultLayer = (model: PlotModel): ResultLayer | null => {
 
 export const buildStructureScene = (model: PlotModel, options: StructureSceneOptions): SceneItem[] => {
   const frames = memberFrames(model);
-  const connected = new Set(model.members.flatMap((m) => [m.start, m.end]));
+  const connected = new Set(
+    options.freeNodes ? model.nodes.map((n) => n.id) : model.members.flatMap((m) => [m.start, m.end])
+  );
   const fmt = (v: number, u: Unit) => formatQuantity(v, u, options.numberFormat);
-  const size = options.compact ? SIZES.compact : SIZES.full;
+  const preset = options.compact ? SIZES.compact : SIZES.full;
+  const size: Sizes = { ...preset, ...options.sizes };
   const { layers } = options;
   const items: SceneItem[] = [];
 
   const results = model.results;
   if (results) {
     const k = diagramScales(model, options);
+    /** The diagrams' values, placed together once all are known */
+    const values: SceneText[] = [];
     for (const q of ['N', 'V', 'M'] as const) {
       if (!layers.has(q) || !(k[q] > 0)) continue;
       if (q === 'N' && isBarStructure(model, results.members)) {
         items.push(...barForceLabels(model, frames, results.members, options));
         continue;
       }
-      const side = diagramSide(q, options.momentOnTensionSide);
+      const side = diagramSide(q, options.momentOnTensionSide, options);
       for (const m of model.members) {
         const r = results.members[m.id];
         const f = frameOf(frames, m.id);
@@ -1767,41 +2416,63 @@ export const buildStructureScene = (model: PlotModel, options: StructureSceneOpt
           const closed = [0, 1].map(
             (end) => !continuesInto(model, frames, results.members, q, side, m, end as 0 | 1)
           ) as [boolean, boolean];
-          items.push(...diagramShape(q, f, r[q], DIAGRAM_TONE[q], k[q], normal, options.scale, closed));
+          items.push(
+            ...tagged(
+              diagramShape(q, f, r[q], DIAGRAM_TONE[q], k[q], normal, options.scale, closed, options.diagramFill),
+              memberEntity(m.id)
+            )
+          );
+          if (options.showDegrees)
+            items.push(...tagged(degreeLabels(q, f, r[q], k[q], normal, options), memberEntity(m.id)));
         }
       }
       const labels = diagramLabels(model, frames, results.members, q, k[q], side, options);
-      items.push(...(options.compact ? limitPerMember(labels, 2) : labels).map((c) => c.item));
+      values.push(
+        ...(options.compact ? limitPerMember(labels, 2) : labels).map((c) => ({
+          ...c.item,
+          entity: memberEntity(c.members[0]),
+        }))
+      );
     }
+    items.push(...(options.sideBySide ? sideBySide(values, options.fontSize ?? 13) : values));
     if (layers.has('w') && k.w > 0) {
       for (const m of model.members) {
         const r = results.members[m.id];
-        if (r) items.push(deformedPath(frameOf(frames, m.id), r, k.w, size.deformed));
+        if (r)
+          items.push({ ...deformedPath(frameOf(frames, m.id), r, k.w, size.deformed), entity: memberEntity(m.id) });
       }
       for (const peak of largestDisplacements(model, frames, results.members)) {
         const f = frameOf(frames, peak.member);
         const d = { x: peak.u * f.tx + peak.w * f.nx, y: peak.u * f.tz + peak.w * f.nz };
         const p = at(f, peak.x, k.w * d.x, k.w * d.y);
-        items.push(
-          text(
+        items.push({
+          ...text(
             'w',
             p,
             unit(d.x, d.y),
             5,
-            formatNumber(peak.size * options.units.displacement.scale, options.numberFormat),
+            options.displacementText
+              ? options.displacementText(peak.size * options.units.displacement.scale)
+              : formatNumber(peak.size * options.units.displacement.scale, options.numberFormat),
             'deformed',
             7
-          )
-        );
+          ),
+          entity: memberEntity(peak.member),
+        });
       }
     }
   }
 
   if (layers.has('members')) items.push(...memberItems(model, frames, size), ...hingeItems(model, frames, size));
-  if (layers.has('supports')) items.push(...supportItems(model, connected));
-  if (layers.has('nodes') || layers.has('nodeLabels')) items.push(...nodeItems(model, connected, layers));
+  if (layers.has('supports'))
+    items.push(...supportItems(model, connected, options.labelsAvoidSupports === true, options.supportScale ?? 1));
+  if (layers.has('nodes') || layers.has('nodeLabels')) items.push(...nodeItems(model, connected, layers, size));
+  if (layers.has('memberLabels')) items.push(...memberLabelItems(model, frames, size));
   if (layers.has('dimensions')) items.push(...dimensionItems(model, frames, options, fmt));
-  if (layers.has('loads')) items.push(...loadItems(model, frames, options, size, fmt));
+  // Bare numbers for loads written at their ends, as the editor does
+  const loadFmt =
+    options.loadLabels === 'ends' ? (v: number, u: Unit) => formatNumber(v * u.scale, options.numberFormat) : fmt;
+  if (layers.has('loads')) items.push(...loadItems(model, frames, options, size, loadFmt));
   if (layers.has('reactions')) {
     const reactions = options.reactionLabels === 'names' ? unknownReactions(model) : results?.reactions;
     if (reactions) items.push(...reactionItems(model, reactions, options, size));

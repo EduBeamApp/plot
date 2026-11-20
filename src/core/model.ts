@@ -36,38 +36,43 @@ export interface LineIntensity {
 
 export type PlotLoad =
   /** A force at a node, global components, N. */
-  | { readonly kind: 'nodalForce'; readonly node: string; readonly fx: number; readonly fz: number }
-  /** A moment at a node, N·m, positive counter-clockwise on screen. */
-  | { readonly kind: 'nodalMoment'; readonly node: string; readonly my: number }
-  /** Linearly varying load over the whole member; a uniform load has start equal to end. */
-  | {
-      readonly kind: 'distributed';
-      readonly member: string;
-      readonly start: LineIntensity;
-      readonly end: LineIntensity;
-      /** Components along the member's local x and z rather than the global axes. */
-      readonly local: boolean;
-    }
-  /** A force on a member `at` metres from its start node. */
-  | {
-      readonly kind: 'pointForce';
-      readonly member: string;
-      readonly at: number;
-      readonly fx: number;
-      readonly fz: number;
-      readonly local: boolean;
-    }
-  | { readonly kind: 'pointMoment'; readonly member: string; readonly at: number; readonly my: number }
-  /** Temperature change, K: of the centroid, and bottom minus top fibres (ΔTb − ΔTt). */
-  | { readonly kind: 'temperature'; readonly member: string; readonly uniform: number; readonly gradient: number }
-  /** Imposed displacement of a support, in the node's axes: m and rad. */
-  | {
-      readonly kind: 'prescribed';
-      readonly node: string;
-      readonly dx?: number;
-      readonly dz?: number;
-      readonly ry?: number;
-    };
+  (
+    | { readonly kind: 'nodalForce'; readonly node: string; readonly fx: number; readonly fz: number }
+    /** A moment at a node, N·m, positive counter-clockwise on screen. */
+    | { readonly kind: 'nodalMoment'; readonly node: string; readonly my: number }
+    /** Linearly varying load over the whole member; a uniform load has start equal to end. */
+    | {
+        readonly kind: 'distributed';
+        readonly member: string;
+        readonly start: LineIntensity;
+        readonly end: LineIntensity;
+        /** Components along the member's local x and z rather than the global axes. */
+        readonly local: boolean;
+      }
+    /** A force on a member `at` metres from its start node. */
+    | {
+        readonly kind: 'pointForce';
+        readonly member: string;
+        readonly at: number;
+        readonly fx: number;
+        readonly fz: number;
+        readonly local: boolean;
+      }
+    | { readonly kind: 'pointMoment'; readonly member: string; readonly at: number; readonly my: number }
+    /** Temperature change, K: of the centroid, and bottom minus top fibres (ΔTb − ΔTt). */
+    | { readonly kind: 'temperature'; readonly member: string; readonly uniform: number; readonly gradient: number }
+    /** Imposed displacement of a support, in the node's axes: m and rad. */
+    | {
+        readonly kind: 'prescribed';
+        readonly node: string;
+        readonly dx?: number;
+        readonly dz?: number;
+        readonly ry?: number;
+      }
+  ) & {
+    /** Where the caller keeps it, to tell which drawn load is which (the editor's `nodalLoad:3`). */
+    readonly source?: string;
+  };
 
 export type PlotLoadKind = PlotLoad['kind'];
 

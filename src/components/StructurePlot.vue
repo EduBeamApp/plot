@@ -110,7 +110,7 @@ const groups = computed(() =>
   PLOT_LAYERS.filter((layer) => reserved.value.has(layer)).map((layer) => ({
     layer,
     on: shown.value.has(layer),
-    paths: layout.value.resolved.paths.filter((p) => p.group === layer),
+    paths: layout.value.resolved.paths.filter((p) => p.group === layer && !p.hitArea),
     circles: layout.value.resolved.circles.filter((c) => c.group === layer),
     texts: layout.value.resolved.texts.filter((t) => t.group === layer),
   }))
@@ -132,7 +132,7 @@ const onMove = (e: PointerEvent) => {
   const py = ((e.clientY - rect.top) / rect.height) * layout.value.fit.height;
   // Within reach of a member, or anywhere over its diagram, which stands up to `diagramSize` off it
   const reach = 18 + (readable.value.length > 0 ? options.value.diagramSize : 0);
-  readout.value = readoutAt(model.value, layout.value.fit, px, py, reach);
+  readout.value = readoutAt(model.value, layout.value.fit, px, py, reach, readable.value);
 };
 const onLeave = () => (readout.value = null);
 

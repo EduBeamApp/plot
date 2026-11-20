@@ -66,20 +66,22 @@ const nodalToGlobal = (node: Node, fx: number, fz: number, inNodeAxes: boolean):
 const extractLoads = (solver: Solver, lc: LoadCase): PlotLoad[] => {
   const loads: PlotLoad[] = [];
 
-  for (const nl of lc.nodalLoadList) {
+  for (const [i, nl] of lc.nodalLoadList.entries()) {
+    const source = `nodalLoad:${i}`;
     const node = solver.domain.getNode(nl.target);
     const fx = nl.values[DofID.Dx] ?? 0;
     const fz = nl.values[DofID.Dz] ?? 0;
     const my = nl.values[DofID.Ry] ?? 0;
     if (fx !== 0 || fz !== 0)
-      loads.push({ kind: 'nodalForce', node: nl.target, ...nodalToGlobal(node, fx, fz, nl.lcs) });
-    if (my !== 0) loads.push({ kind: 'nodalMoment', node: nl.target, my });
+      loads.push({ kind: 'nodalForce', node: nl.target, ...nodalToGlobal(node, fx, fz, nl.lcs), source });
+    if (my !== 0) loads.push({ kind: 'nodalMoment', node: nl.target, my, source });
   }
 
-  for (const el of lc.elementLoadList) {
+  for (const [i, el] of lc.elementLoadList.entries()) {
+    const source = `elementLoad:${i}`;
     if (el instanceof BeamElementUniformEdgeLoad) {
       const q = { fx: el.values[0] ?? 0, fz: el.values[1] ?? 0 };
-      loads.push({ kind: 'distributed', member: el.target, start: q, end: q, local: el.lcs });
+      loads.push({ kind: 'distributed', member: el.target, start: q, end: q, local: el.lcs, source });
     } else if (el instanceof BeamElementTrapezoidalEdgeLoad) {
       loads.push({
         kind: 'distributed',
@@ -87,20 +89,29 @@ const extractLoads = (solver: Solver, lc: LoadCase): PlotLoad[] => {
         start: { fx: el.startValues[0], fz: el.startValues[1] },
         end: { fx: el.endValues[0], fz: el.endValues[1] },
         local: el.lcs,
+        source,
       });
     } else if (el instanceof BeamConcentratedLoad) {
       const [fx = 0, fz = 0, my = 0, at = 0] = el.values;
-      if (fx !== 0 || fz !== 0) loads.push({ kind: 'pointForce', member: el.target, at, fx, fz, local: el.lcs });
-      if (my !== 0) loads.push({ kind: 'pointMoment', member: el.target, at, my });
+      if (fx !== 0 || fz !== 0)
+        loads.push({ kind: 'pointForce', member: el.target, at, fx, fz, local: el.lcs, source });
+      if (my !== 0) loads.push({ kind: 'pointMoment', member: el.target, at, my, source });
     } else if (el instanceof BeamTemperatureLoad) {
       const [uniform = 0, bottom = 0, top = 0] = el.values;
-      loads.push({ kind: 'temperature', member: el.target, uniform, gradient: bottom - top });
+      loads.push({ kind: 'temperature', member: el.target, uniform, gradient: bottom - top, source });
     }
   }
 
-  for (const pd of lc.prescribedBC) {
+  for (const [i, pd] of lc.prescribedBC.entries()) {
     const v = pd.prescribedValues;
-    loads.push({ kind: 'prescribed', node: pd.target, dx: v[DofID.Dx], dz: v[DofID.Dz], ry: v[DofID.Ry] });
+    loads.push({
+      kind: 'prescribed',
+      node: pd.target,
+      dx: v[DofID.Dx],
+      dz: v[DofID.Dz],
+      ry: v[DofID.Ry],
+      source: `prescribed:${i}`,
+    });
   }
 
   return loads;

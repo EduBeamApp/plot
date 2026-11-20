@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { DofID } from '@edubeam/fem';
 import { modelFromSolver } from './fromSolver';
 import { buildStructureScene, defaultResultLayer, tipPlacements, type PlotLayer } from './structure';
-import { anchor, fitScene, placeLabels, project, type SceneItem, type SceneText } from './scene';
+import { anchor, fitScene, LAYERS, placeLabels, project, type SceneItem, type SceneText } from './scene';
 import { resolveUnits } from './units';
 import { appExamples, buildAppExample, buildStepsFrame } from '../testing/appExamples';
 import * as S from '../testing/structures';
@@ -429,5 +429,321 @@ describe('an exercise sheet keeps every dimension', () => {
       expect(dims.sort()).toEqual(['1 m', '7 m', '8 m'].sort());
       expect(resolved.texts.filter((t) => t.group === 'reactions')).toHaveLength(3);
     }
+  });
+});
+
+describe('reactions aim at their node', () => {
+  it('draws every reaction force on its line of action through the node, the horizontal ones too', () => {
+    // Pins at both feet: a vertical and a horizontal reaction at each
+    const items = scene(S.threeHingedFrame(), ['members', 'supports', 'reactions']);
+    const shafts = items.filter(
+      (i): i is Extract<SceneItem, { kind: 'path' }> =>
+        i.kind === 'path' && i.group === 'reactions' && i.fill !== 'tone' && i.segments.every((s) => s.op !== 'A')
+    );
+    expect(shafts.length).toBe(4);
+    for (const shaft of shafts) {
+      const points = shaft.segments.flatMap((s) => ('p' in s ? [s.p] : []));
+      // Offsets from the node along one screen axis only: the shaft runs through the node
+      const vertical = points.every((p) => Math.abs(p.dx) < 1e-9);
+      const horizontal = points.every((p) => Math.abs(p.dy) < 1e-9);
+      expect(vertical || horizontal).toBe(true);
+    }
+  });
+});
+
+describe('member labels', () => {
+  it("writes each member's name once, along it and never upside down", () => {
+    const labels = texts(scene(S.threeHingedFrame(), ['members', 'memberLabels'])).filter(
+      (t) => t.group === 'memberLabels'
+    );
+    const model = modelFromSolver(S.threeHingedFrame());
+    expect(labels.map((t) => t.text).sort()).toEqual(model.members.map((m) => m.id).sort());
+    for (const t of labels) {
+      expect(t.rotate).toBeGreaterThan(-90);
+      expect(t.rotate).toBeLessThanOrEqual(90);
+    }
+  });
+});
+
+describe('given data before results', () => {
+  // A load's value and a moment value wanting the same place, with the moment diagram's outline
+  // running straight through it
+  const load: SceneText = {
+    kind: 'text',
+    group: 'loads',
+    layer: LAYERS.label,
+    tone: 'load',
+    text: '10 kN/m',
+    at: anchor(0, 0),
+    align: 'middle',
+    baseline: 'middle',
+    priority: 5,
+  };
+  const value: SceneText = { ...load, group: 'M', tone: 'moment', text: '12.5', priority: 6.5 };
+  const outline: SceneItem = {
+    kind: 'path',
+    group: 'M',
+    layer: LAYERS.diagramLine,
+    tone: 'moment',
+    width: 1.75,
+    shield: true,
+    segments: [
+      { op: 'M', p: anchor(0, 0, -40, 0) },
+      { op: 'L', p: anchor(0, 0, 40, 0) },
+    ],
+  };
+  const items: SceneItem[] = [outline, value, load];
+  const t = { s: 1, tx: 100, ty: 100 };
+
+  it('keeps a crowded load value, across the diagram, when results are placed late', () => {
+    const kept = placeLabels(items, t, { fontSize: 13, lateGroups: new Set(['M']) });
+    expect(kept.has(load)).toBe(true);
+    expect(kept.has(value)).toBe(false);
+  });
+
+  it('places by priority alone without it, as before', () => {
+    const kept = placeLabels(items, t, { fontSize: 13 });
+    expect(kept.has(load)).toBe(false);
+    expect(kept.has(value)).toBe(true);
+  });
+});
+
+describe('loads written as the editor annotates them', () => {
+  it('writes a uniform load at both ends, as bare numbers', () => {
+    const loads = texts(scene(S.simplySupportedUdl(), ['members', 'supports', 'loads'], { loadLabels: 'ends' })).filter(
+      (t) => t.group === 'loads'
+    );
+    expect(loads.map((t) => t.text)).toEqual(['12', '12']);
+  });
+
+  it('writes it once with its unit by default', () => {
+    const loads = texts(scene(S.simplySupportedUdl(), ['members', 'supports', 'loads'])).filter(
+      (t) => t.group === 'loads'
+    );
+    expect(loads.map((t) => t.text)).toEqual(['q = 12\u202fkN/m']);
+  });
+});
+
+describe('a constant diagram', () => {
+  // The shear of a simple beam under a point load is constant on each side of it; its normal force
+  // in a two-bar truss is constant along each bar. A cantilever under a tip load: V constant.
+  it('is written once by default, at both ends when asked', () => {
+    const values = (extra = {}) =>
+      texts(scene(S.cantileverTipLoad(), ['members', 'V'], extra))
+        .filter((t) => t.group === 'V')
+        .map((t) => t.text);
+    expect(values()).toEqual(['18']);
+    expect(values({ constantDiagrams: 'ends' })).toEqual(['18', '18']);
+  });
+});
+
+describe('what each item draws', () => {
+  it('marks members, nodes and loads, so a caller can highlight one', () => {
+    const items = scene(S.portalFrame(), ['members', 'supports', 'loads', 'reactions', 'nodeLabels', 'M']);
+    const model = modelFromSolver(S.portalFrame());
+    const entities = new Set(items.map((i) => i.entity));
+    for (const m of model.members) expect(entities.has(`member:${m.id}`)).toBe(true);
+    for (const n of model.nodes) expect(entities.has(`node:${n.id}`)).toBe(true);
+    for (const l of model.loads) expect(entities.has(l.source)).toBe(true);
+    // Everything but the dimensions belongs to something
+    expect(items.every((i) => i.entity !== undefined)).toBe(true);
+  });
+});
+
+describe('loads that push the same way stack', () => {
+  it('puts a second band on top of the first, its arrows resting on the first one', () => {
+    const solver = S.simplySupportedUdl();
+    solver.loadCases[0].createBeamElementUniformEdgeLoad(1, [0, 5e3], true);
+    solver.solve();
+    const items = scene(solver, ['members', 'loads'], { loadLabels: 'ends' });
+    // The bands' top lines: an obstacle path in the loads group running the member's length
+    const tops = items
+      .filter(
+        (i): i is Extract<SceneItem, { kind: 'path' }> =>
+          i.kind === 'path' && i.group === 'loads' && i.obstacle === true
+      )
+      .map((p) => {
+        const [first] = p.segments.flatMap((sg) => ('p' in sg ? [sg.p] : []));
+        return first.dy;
+      })
+      .sort((a, b) => b - a);
+    expect(tops).toHaveLength(2);
+    // One band 32 px over the beam, the next on top of it
+    expect(tops[0]).toBeCloseTo(-32, 6);
+    expect(tops[1]).toBeCloseTo(-32 - 34, 6);
+    // Both bands keep their values, at both ends
+    const values = texts(items)
+      .filter((t) => t.group === 'loads')
+      .map((t) => t.text);
+    expect(values.sort()).toEqual(['12', '12', '5', '5']);
+  });
+});
+
+describe('a load with two components', () => {
+  it('is drawn as the two loads it was entered as when asked, as its resultant by default', () => {
+    const solver = S.simplySupportedUdl(6, 0);
+    solver.loadCases[0].createBeamElementUniformEdgeLoad(1, [5e3, 10e3], true);
+    solver.solve();
+    const values = (extra = {}) =>
+      texts(scene(solver, ['members', 'loads'], { loadLabels: 'ends', ...extra }))
+        .filter((t) => t.group === 'loads')
+        .map((t) => t.text)
+        .sort();
+    // 11.18 = √(5² + 10²)
+    expect(values()).toEqual(['11.2', '11.2']);
+    expect(values({ splitLoads: true })).toEqual(['10', '10', '5']);
+  });
+});
+
+describe('a rigid corner', () => {
+  it("writes its moment once by default, at each member's end when asked", () => {
+    const count = (extra = {}) =>
+      texts(scene(S.portalFrame(), ['members', 'M'], extra)).filter((t) => t.group === 'M').length;
+    // The portal's two corners: one value each, or one for each of the two members there
+    expect(count({ cornerValues: 'each' })).toBe(count() + 2);
+  });
+});
+
+describe('a diagram running straight on through a node', () => {
+  it('writes the value it has on both sides once', () => {
+    // A two-span beam under a uniform load: M over the middle support is one value
+    const values = texts(scene(S.continuousBeam(), ['members', 'M'], { cornerValues: 'each' }))
+      .filter((t) => t.group === 'M')
+      .map((t) => t.text);
+    const hogging = values.filter((v) => v.startsWith('−'));
+    expect(hogging).toHaveLength(1);
+  });
+});
+
+describe("the editor's diagram style", () => {
+  const paths = (items: SceneItem[]) =>
+    items.filter((i): i is Extract<SceneItem, { kind: 'path' }> => i.kind === 'path' && i.group === 'M');
+
+  it('fills a diagram with a tint, with lines, or not at all', () => {
+    const solid = paths(scene(S.simplySupportedUdl(), ['members', 'M'], { diagramFill: 'solid' }));
+    expect(solid.some((p) => p.fill === 'tone' && p.fillOpacity !== undefined)).toBe(true);
+    const none = paths(scene(S.simplySupportedUdl(), ['members', 'M'], { diagramFill: 'none' }));
+    expect(none).toHaveLength(1);
+    const hatch = paths(scene(S.simplySupportedUdl(), ['members', 'M']));
+    expect(hatch).toHaveLength(2);
+  });
+
+  it("writes each piece's degree: a uniform load's moment is a parabola, its shear a line", () => {
+    const degrees = (q: 'M' | 'V') =>
+      texts(scene(S.simplySupportedUdl(), ['members', q], { showDegrees: true }))
+        .filter((t) => t.text.endsWith('°'))
+        .map((t) => t.text);
+    expect(degrees('M')).toEqual(['2°']);
+    expect(degrees('V')).toEqual(['1°']);
+  });
+
+  it('draws N and V on the dashed side when asked', () => {
+    // A cantilever's shear is positive and constant: its outline's ordinates point to one side or the other
+    const side = (extra = {}) => {
+      const [outline] = scene(S.cantileverTipLoad(), ['members', 'V'], extra).filter(
+        (i): i is Extract<SceneItem, { kind: 'path' }> => i.kind === 'path' && i.group === 'V'
+      );
+      return Math.sign(outline.segments.flatMap((s) => ('p' in s ? [s.p.dy] : [])).find((dy) => dy !== 0)!);
+    };
+    expect(side({ shearOnDashedSide: true })).toBe(-side());
+  });
+
+  it("draws the supports at the editor's size", () => {
+    const extent = (extra = {}) => {
+      const pts = scene(S.simplySupportedUdl(), ['supports'], extra)
+        .filter((i): i is Extract<SceneItem, { kind: 'path' }> => i.kind === 'path')
+        .flatMap((p) => p.segments.flatMap((s) => ('p' in s ? [s.p.dy] : [])));
+      return Math.max(...pts);
+    };
+    expect(extent({ supportScale: 1.5 })).toBeCloseTo(1.5 * extent(), 6);
+  });
+});
+
+describe('a band to point at', () => {
+  it('gives each distributed load an area covering its band, marked as not drawn and tagged with the load', () => {
+    const items = scene(S.simplySupportedUdl(), ['members', 'loads']).filter(
+      (i): i is Extract<SceneItem, { kind: 'path' }> => i.kind === 'path' && i.hitArea === true
+    );
+    expect(items).toHaveLength(1);
+    expect(items[0].entity).toBe('elementLoad:0');
+    expect(items[0].obstacle).toBeFalsy();
+  });
+});
+
+describe('yielding groups', () => {
+  it("place their labels last and keep no other group's label off their lines", () => {
+    // A moment value wanting the spot a load's line runs through
+    const line: SceneItem = {
+      kind: 'path',
+      group: 'loads',
+      layer: LAYERS.load,
+      tone: 'load',
+      width: 1.25,
+      obstacle: true,
+      segments: [
+        { op: 'M', p: anchor(0, 0, -40, 0) },
+        { op: 'L', p: anchor(0, 0, 40, 0) },
+      ],
+    };
+    const value: SceneText = {
+      kind: 'text',
+      group: 'M',
+      layer: LAYERS.label,
+      tone: 'moment',
+      text: '12.5',
+      at: anchor(0, 0),
+      align: 'middle',
+      baseline: 'middle',
+      priority: 6.5,
+    };
+    const t = { s: 1, tx: 100, ty: 100 };
+    expect(placeLabels([line, value], t, { fontSize: 13 }).has(value)).toBe(false);
+    expect(placeLabels([line, value], t, { fontSize: 13, yieldingGroups: new Set(['loads']) }).has(value)).toBe(true);
+  });
+});
+
+describe('free nodes', () => {
+  const withFreeNode = () => {
+    const solver = S.simplySupportedUdl();
+    solver.domain.createNode('F', [2, 0, 1], [DofID.Dx, DofID.Dz]);
+    return solver;
+  };
+
+  it('are left out of a figure', () => {
+    const items = scene(withFreeNode(), ['members', 'supports', 'nodeLabels']);
+    expect(texts(items).some((t) => t.text === 'F')).toBe(false);
+    expect(items.some((i) => i.entity === 'node:F')).toBe(false);
+  });
+
+  it('are drawn with their names and supports in an editor', () => {
+    const items = scene(withFreeNode(), ['members', 'supports', 'nodeLabels'], { freeNodes: true });
+    expect(texts(items).some((t) => t.text === 'F')).toBe(true);
+    expect(items.some((i) => i.group === 'supports' && i.entity === 'node:F')).toBe(true);
+  });
+});
+
+describe('values on one ordinate line, written along it', () => {
+  const values = (mode: 'axis' | 'horizontal') =>
+    texts(
+      scene(S.cantileverTipLoad(), ['members', 'V', 'M'], {
+        sideBySide: true,
+        resultLabelMode: mode,
+        constantDiagrams: 'ends',
+      })
+    ).filter((t) => t.group === 'V' || t.group === 'M');
+
+  it('stand side by side, each half a line off the line, before either is pushed out', () => {
+    const shared = values('axis').filter((t) => t.acrossDiagrams);
+    expect(shared).toHaveLength(2);
+    const [a, b] = shared;
+    expect(new Set([a.baseline, b.baseline])).toEqual(new Set(['top', 'bottom']));
+    // Mirrored about the line: the same distance out, a pixel either side
+    expect(Math.hypot(a.at.dx - b.at.dx, a.at.dy - b.at.dy)).toBeCloseTo(2, 6);
+    // Each keeps its place on the line as the next to try
+    expect(a.alternatives?.[0].baseline).toBe('middle');
+  });
+
+  it('are left as they are, written horizontally', () => {
+    expect(values('horizontal').some((t) => t.acrossDiagrams)).toBe(false);
   });
 });
