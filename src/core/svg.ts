@@ -8,6 +8,7 @@ import type { PlotModel } from './model';
 import {
   SUB_DROP,
   SUB_SCALE,
+  textRuns,
   type ResolvedCircle,
   type ResolvedPath,
   type ResolvedScene,
@@ -206,7 +207,13 @@ export const sceneMarkup = (
     // A subscript as a tspan with plain numbers, which Word and Inkscape both read
     const textSize = t.size ?? fontSize;
     const content =
-      escapeXml(t.text) +
+      textRuns(t.text, textSize)
+        .map((r) =>
+          r.size === undefined && r.dy === undefined
+            ? escapeXml(r.text)
+            : `<tspan ${attrs({ 'font-size': r.size, dy: r.dy })}>${escapeXml(r.text)}</tspan>`
+        )
+        .join('') +
       (t.sub
         ? `<tspan ${attrs({ 'font-size': round(textSize * SUB_SCALE), dy: round(textSize * SUB_DROP) })}>${escapeXml(t.sub)}</tspan>`
         : '');

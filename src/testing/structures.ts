@@ -48,6 +48,52 @@ export const simplySupportedUdl = (L = 6, q = 12e3, section: Section = IPE200): 
   return done(s);
 };
 
+/** Three spans in line, 4 m each: 10 kN/m on the first two, then 10 rising to 30 on the last */
+export const continuedLoads = (): LinearStaticSolver => {
+  const s = create();
+  s.domain.createNode(1, [0, 0, 0], PIN);
+  s.domain.createNode(2, [4, 0, 0], ROLLER);
+  s.domain.createNode(3, [8, 0, 0], ROLLER);
+  s.domain.createNode(4, [12, 0, 0], ROLLER);
+  s.domain.createBeam2D('a', [1, 2], 1, 1);
+  s.domain.createBeam2D('b', [2, 3], 1, 1);
+  s.domain.createBeam2D('c', [3, 4], 1, 1);
+  lc(s).createBeamElementUniformEdgeLoad('a', [0, 10e3], true);
+  lc(s).createBeamElementUniformEdgeLoad('b', [0, 10e3], true);
+  lc(s).createBeamElementTrapezoidalEdgeLoad('c', [0, 10e3], [0, 30e3], true);
+  return done(s);
+};
+
+/** A fixed-base portal, columns `height` tall and `width` apart, pushed sideways at its top */
+export const tallPortal = (height = 12, width = 1, push = 15e3): LinearStaticSolver => {
+  const s = create();
+  s.domain.createNode(1, [0, 0, 0], FIXED);
+  s.domain.createNode(2, [0, 0, -height], []);
+  s.domain.createNode(3, [width, 0, -height], []);
+  s.domain.createNode(4, [width, 0, 0], FIXED);
+  s.domain.createBeam2D(1, [1, 2], 1, 1);
+  s.domain.createBeam2D(2, [2, 3], 1, 1);
+  s.domain.createBeam2D(3, [4, 3], 1, 1);
+  lc(s).createNodalLoad(2, { [Dx]: push });
+  return done(s);
+};
+
+/**
+ * A simple beam split at mid-span, as an editor splits one to put a node there: a linearly varying
+ * load from 0 to 2q over the whole span, in two parts meeting at q.
+ */
+export const splitSimpleBeam = (L = 6, q = 12e3): LinearStaticSolver => {
+  const s = create();
+  s.domain.createNode(1, [0, 0, 0], PIN);
+  s.domain.createNode(2, [L / 2, 0, 0], []);
+  s.domain.createNode(3, [L, 0, 0], ROLLER);
+  s.domain.createBeam2D('1a', [1, 2], 1, 1);
+  s.domain.createBeam2D('1b', [2, 3], 1, 1);
+  lc(s).createBeamElementTrapezoidalEdgeLoad('1a', [0, 0], [0, q], true);
+  lc(s).createBeamElementTrapezoidalEdgeLoad('1b', [0, q], [0, 2 * q], true);
+  return done(s);
+};
+
 /** L = 4 m, F = 18 kN down at the tip: R = 18 kN, M = 72 kNm, w = 94.42 mm. */
 export const cantileverTipLoad = (L = 4, F = 18e3): LinearStaticSolver => {
   const s = create();

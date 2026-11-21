@@ -68,7 +68,10 @@ const extractLoads = (solver: Solver, lc: LoadCase): PlotLoad[] => {
 
   for (const [i, nl] of lc.nodalLoadList.entries()) {
     const source = `nodalLoad:${i}`;
-    const node = solver.domain.getNode(nl.target);
+    // A load naming a node that is not there (an old file, a hand-edited link) is left out, not thrown
+    // on: the rest of the model is still drawn
+    const node = solver.domain.nodes.get(nl.target);
+    if (!node) continue;
     const fx = nl.values[DofID.Dx] ?? 0;
     const fz = nl.values[DofID.Dz] ?? 0;
     const my = nl.values[DofID.Ry] ?? 0;

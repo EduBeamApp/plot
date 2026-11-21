@@ -459,9 +459,18 @@ describe('member labels', () => {
     const model = modelFromSolver(S.threeHingedFrame());
     expect(labels.map((t) => t.text).sort()).toEqual(model.members.map((m) => m.id).sort());
     for (const t of labels) {
-      expect(t.rotate).toBeGreaterThan(-90);
-      expect(t.rotate).toBeLessThanOrEqual(90);
+      expect(t.rotate).toBeGreaterThanOrEqual(-90);
+      expect(t.rotate).toBeLessThan(90);
     }
+  });
+
+  it('reads upward along a vertical member, however it was drawn', () => {
+    // Column 1 is drawn up from its base, column 3 down to its base
+    const labels = texts(scene(S.portalFrame(), ['members', 'memberLabels'])).filter((t) => t.group === 'memberLabels');
+    const rotation = Object.fromEntries(labels.map((t) => [t.text, t.rotate]));
+    expect(rotation['1']).toBe(-90);
+    expect(rotation['3']).toBe(-90);
+    expect(rotation['2']).toBeCloseTo(0, 9);
   });
 });
 
@@ -616,8 +625,9 @@ describe('a diagram running straight on through a node', () => {
 });
 
 describe("the editor's diagram style", () => {
+  // What is drawn: not the area to point at
   const paths = (items: SceneItem[]) =>
-    items.filter((i): i is Extract<SceneItem, { kind: 'path' }> => i.kind === 'path' && i.group === 'M');
+    items.filter((i): i is Extract<SceneItem, { kind: 'path' }> => i.kind === 'path' && i.group === 'M' && !i.hitArea);
 
   it('fills a diagram with a tint, with lines, or not at all', () => {
     const solid = paths(scene(S.simplySupportedUdl(), ['members', 'M'], { diagramFill: 'solid' }));
@@ -667,6 +677,18 @@ describe('a band to point at', () => {
     expect(items).toHaveLength(1);
     expect(items[0].entity).toBe('elementLoad:0');
     expect(items[0].obstacle).toBeFalsy();
+  });
+});
+
+describe('a diagram to point at', () => {
+  it('gives each member an area covering its diagram, however it is filled, not drawn and tagged with the member', () => {
+    for (const diagramFill of ['hatch', 'solid', 'none'] as const) {
+      const areas = scene(S.continuousBeam(), ['members', 'M'], { diagramFill }).filter(
+        (i): i is Extract<SceneItem, { kind: 'path' }> => i.kind === 'path' && i.hitArea === true
+      );
+      expect(areas.map((a) => a.entity)).toEqual(['member:1', 'member:2']);
+      expect(areas.every((a) => a.group === 'M' && a.fitIgnore === true)).toBe(true);
+    }
   });
 });
 
@@ -745,5 +767,90 @@ describe('values on one ordinate line, written along it', () => {
 
   it('are left as they are, written horizontally', () => {
     expect(values('horizontal').some((t) => t.acrossDiagrams)).toBe(false);
+  });
+});
+
+describe('the largest displacement', () => {
+  it('is marked when asked: a dot where it is, a dashed line from where it was', () => {
+    const marked = scene(S.simplySupportedUdl(), ['members', 'w'], { displacementMarker: true });
+    const dot = marked.find((i) => i.kind === 'circle' && i.group === 'w');
+    const line = marked.find((i) => i.kind === 'path' && i.group === 'w' && i.dash !== undefined);
+    expect(dot).toBeDefined();
+    expect(line).toBeDefined();
+    // Not by default: a figure on a page stays as it was
+    const plain = scene(S.simplySupportedUdl(), ['members', 'w']);
+    expect(plain.some((i) => i.kind === 'circle' && i.group === 'w')).toBe(false);
+  });
+});
+
+describe("a member's name", () => {
+  it('may cross a diagram line rather than leave its middle', () => {
+    const name = texts(scene(S.simplySupportedUdl(), ['members', 'memberLabels'])).find(
+      (t) => t.group === 'memberLabels'
+    )!;
+    expect(name.acrossDiagrams).toBe(true);
+    expect((name.alternatives ?? []).every((p) => p.acrossDiagrams)).toBe(true);
+  });
+});
+
+describe('a maximum inside a member', () => {
+  it("gets its ordinate drawn when asked, with its value, and its value may cross another diagram's line", () => {
+    const items = scene(S.simplySupportedUdl(), ['members', 'M'], { extremeOrdinates: true });
+    const peak = texts(items).find((t) => t.group === 'M')!;
+    const ordinate = items.find((i) => i.kind === 'path' && i.group === 'M' && i.requires === peak);
+    expect(ordinate).toBeDefined();
+    expect(peak.acrossDiagrams).toBe(true);
+    // Not by default
+    const plain = scene(S.simplySupportedUdl(), ['members', 'M']);
+    expect(plain.some((i) => i.kind === 'path' && i.requires !== undefined)).toBe(false);
+  });
+});
+
+describe('the loads in a format of their own', () => {
+  it('writes given loads without the zeros results keep', () => {
+    const twoDecimals = new Intl.NumberFormat('en', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const asGiven = new Intl.NumberFormat('en', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+    const items = scene(S.simplySupportedUdl(), ['members', 'loads', 'M'], {
+      loadLabels: 'ends',
+      numberFormat: twoDecimals,
+      loadNumberFormat: asGiven,
+    });
+    const loads = texts(items).filter((t) => t.group === 'loads');
+    const moments = texts(items).filter((t) => t.group === 'M');
+
+    expect(loads.length).toBeGreaterThan(0);
+    expect(loads.every((t) => !/\.00\b/.test(t.text))).toBe(true);
+    expect(moments.some((t) => /\.\d\d\b/.test(t.text))).toBe(true);
+  });
+});
+
+describe('a beam split where its values meet', () => {
+  it('marks its largest displacement once, though both parts find it', () => {
+    const items = scene(S.splitSimpleBeam(), ['members', 'w'], { displacementMarker: true });
+    expect(texts(items).filter((t) => t.group === 'w')).toHaveLength(1);
+  });
+
+  it('writes the value where the loads meet once', () => {
+    const asGiven = new Intl.NumberFormat('en', { maximumFractionDigits: 2 });
+    const loads = texts(
+      scene(S.splitSimpleBeam(), ['members', 'loads'], { loadLabels: 'ends', numberFormat: asGiven })
+    ).filter((t) => t.group === 'loads');
+    expect(loads.map((t) => t.text).sort()).toEqual(['0', '12', '24']);
+  });
+});
+
+describe('values that are not written twice, and not left out', () => {
+  it('writes the start of a load after one that continues another, which writes nothing', () => {
+    const asGiven = new Intl.NumberFormat('en', { maximumFractionDigits: 2 });
+    const loads = texts(
+      scene(S.continuedLoads(), ['members', 'loads'], { loadLabels: 'ends', numberFormat: asGiven })
+    ).filter((t) => t.group === 'loads');
+    // 10 at the start, 10 where the first two meet, 10 where the rise starts, 30 at the end
+    expect(loads.map((t) => t.text).sort()).toEqual(['10', '10', '10', '30']);
+  });
+
+  it('marks equal displacements at two nodes close together on long columns twice', () => {
+    const items = scene(S.tallPortal(12, 1), ['members', 'w'], { displacementMarker: true });
+    expect(texts(items).filter((t) => t.group === 'w')).toHaveLength(2);
   });
 });

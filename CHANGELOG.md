@@ -2,6 +2,29 @@
 
 All notable changes to `@edubeam/plot` are listed here. The project follows [Semantic Versioning](https://semver.org).
 
+## 0.3.1 (unreleased)
+
+- Every diagram has an undrawn `hitArea` path covering it, whatever its fill, tagged with its member, so an app
+  can treat the pointer over a diagram as over its member.
+- A member's name along a vertical member reads upward, as the diagrams' values do; it read downward.
+- A member's name stays at its member's middle across a diagram's line, moving only for another label.
+- A power of ten in a label (`1.63·10⁻³`) is written as a real superscript, smaller and raised, in plain digits,
+  in the component and in `.svg` files alike; `textRuns` splits a label so an app can do the same.
+- `displacementMarker` marks the largest displacement: a dot on the deformed shape and a dashed line to it from
+  where that point was. Its value may stand anywhere round the dot, and is placed after every maximum.
+- `extremeOrdinates` draws the ordinate of a diagram's maximum inside a member (the largest moment under a
+  distributed load). A maximum's value stays at its tip across other diagrams' lines.
+- A scene item's `requires` names the label it goes with: left out for want of room, the label takes its marks
+  with it, so no dot or ordinate points at a value that is not there.
+- `loadNumberFormat`: the loads' values in a format of their own, so given data can drop the zeros results keep
+  (10 kN, not 10.00 kN).
+- A point force's value tries other places round its arrow before giving up, and given data with no free place
+  takes the place that covers the fewest labels, instead of overlapping at its first.
+- Among given data's labels of equal rank, the one with the fewest places is placed first.
+- `keptGroups`: a label with no free place takes the place that covers the fewest labels already kept, rather
+  than always its first.
+- A nodal load naming a node that is not in the model is left out by `modelFromSolver` instead of throwing.
+
 ## 0.3.0 (2026-11-20)
 
 - **Drawing for an editor**: the options the EduBeam app's new renderer draws with, all off by default.

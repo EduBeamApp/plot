@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { mergePaths, resolveScene, type ResolvedPath } from './scene';
+import { mergePaths, resolveScene, textRuns, type ResolvedPath } from './scene';
 import { modelFromSolver } from './fromSolver';
 import { buildStructureScene, RESULT_LAYERS, type PlotLayer } from './structure';
 import { resolveUnits } from './units';
@@ -60,5 +60,51 @@ describe('placing labels at any zoom', () => {
     );
     expect(performance.now() - started).toBeLessThan(1000);
     expect(resolved.texts.length).toBeGreaterThan(0);
+  });
+});
+
+describe('a label in runs', () => {
+  it('raises a power of ten as a superscript, in plain digits, and comes back down after it', () => {
+    expect(textRuns('1.63·10⁻³ m', 14)).toEqual([
+      { text: '1.63·10' },
+      { text: '−3', size: 10.5, dy: -5.32 },
+      { text: ' m', dy: 5.32 },
+    ]);
+  });
+
+  it('is one run without one', () => {
+    expect(textRuns('18.63', 14)).toEqual([{ text: '18.63' }]);
+  });
+});
+
+describe('a mark that belongs to a label', () => {
+  it('is drawn only when the label is', () => {
+    const label = {
+      kind: 'text' as const,
+      group: 'M',
+      layer: 0 as const,
+      at: { x: 0, z: 0, dx: 0, dy: 0 },
+      text: '15.61',
+      tone: 'moment' as const,
+      align: 'start' as const,
+      baseline: 'middle' as const,
+      priority: 1,
+    };
+    const mark = {
+      kind: 'path' as const,
+      group: 'M',
+      layer: 0 as const,
+      tone: 'moment' as const,
+      width: 1,
+      segments: [
+        { op: 'M' as const, p: { x: 0, z: 0, dx: 0, dy: 0 } },
+        { op: 'L' as const, p: { x: 0, z: 0, dx: 0, dy: 20 } },
+      ],
+      requires: label,
+    };
+    const t = { s: 1, tx: 0, ty: 0 };
+    expect(resolveScene([label, mark], t, { fontSize: 13 }).paths).toHaveLength(1);
+    // Left out, the label takes its mark with it
+    expect(resolveScene([label, mark], t, { fontSize: 13, exclude: new Set([label]) }).paths).toHaveLength(0);
   });
 });

@@ -147,6 +147,11 @@ export interface StructureSceneOptions {
   readonly units: Units;
   readonly numberFormat?: Intl.NumberFormat;
   /**
+   * Writes the loads' values, which are given rather than worked out: an editor may leave off the
+   * zeros its results keep (10 kN, not 10.00 kN). `numberFormat` when left out.
+   */
+  readonly loadNumberFormat?: Intl.NumberFormat;
+  /**
    * Writes a displacement, given in display units. Displacements are orders of magnitude smaller
    * than the forces, so an editor writes them its own way (a power of ten where `numberFormat`'s
    * fixed decimals would round a deflection to zero).
@@ -175,6 +180,16 @@ export interface StructureSceneOptions {
   readonly diagramFill?: 'hatch' | 'solid' | 'none';
   /** Write each piece's polynomial degree inside the diagram: 0°, 1°, 2°, 3°. */
   readonly showDegrees?: boolean;
+  /**
+   * Marks where the structure moves most, as a student marks w_max: a dot on the deformed shape,
+   * and a dashed line to it from where that point was.
+   */
+  readonly displacementMarker?: boolean;
+  /**
+   * A diagram's extremes inside a member (the largest moment under a distributed load) get their
+   * ordinate drawn, from the member to the tip, as a student marks a maximum.
+   */
+  readonly extremeOrdinates?: boolean;
   /** Support symbols' size, as a multiple of the preset's (the editor's support size setting). */
   readonly supportScale?: number;
   /** The plot's font size, px: labels in a tight spot may step down from it to 10 px. */
@@ -790,7 +805,9 @@ const distributedItems = (
   /** How far out from the member this band starts, px: on top of the loads stacked before it */
   offset = 0,
   /** For a load along the member: the side of it its arrows run on, 1 for the member's +z */
-  alongSide: 1 | -1 = -1
+  alongSide: 1 | -1 = -1,
+  /** Its start's value is written already, by the load it continues (see `sharesStart`) */
+  startShared = false
 ): SceneItem[] => {
   const q0 = toScreen(f, load.start.fx, load.start.fz, load.local);
   const q1 = toScreen(f, load.end.fx, load.end.fz, load.local);
@@ -856,7 +873,7 @@ const distributedItems = (
           { op: 'Z' },
         ],
       });
-      const step = Math.max(1, Math.round(lengthPx / 30));
+      const step = Math.min(MAX_REPEATS, Math.max(1, Math.round(lengthPx / 30)));
       for (let i = 0; i < step; i++) {
         const x = ((i + 0.5) * f.length) / step;
         const v = v0 + ((v1 - v0) * x) / f.length;
@@ -1009,9 +1026,11 @@ const distributedItems = (
     const placed = placeText(tail(x, v), Math.sign(v) >= 0 ? out : { x: -out.x, y: -out.y }, gap);
     return { ...placed, align: placed.baseline === 'middle' ? placed.align : align };
   };
+
   for (const [x, v, inward] of labelled ? ends : []) {
     // A zero end is written too when every end is
     if (Math.abs(v) < 1e-9 * vmax && !atEnds) continue;
+    if (x === 0 && startShared && atEnds) continue;
     // Over the end of the band, reading inward (BuildSteps writes q over the beam's left end); a
     // uniform load may move to the middle or the other end when a diagram stands there.
     // An editor writes each end's value just outside the band, beside its top line (the start's
@@ -1083,6 +1102,20 @@ const pointForceItems = (
         { x: d.x * far, y: d.y * far },
       ];
   const end = pull ? tip : tail;
+  const out = pull ? d : { x: -d.x, y: -d.y };
+  const endAt = shift(origin, end.x, end.y);
+  // Off the arrow's free end, away from the point first; where another label stands there, round
+  // that end clear of the shaft, then beside the shaft's middle - near its own arrow, never on a
+  // label already placed
+  // (all but straight back along the shaft, which a label kept for want of room would sit on)
+  const [, ...round] = rankedDirections([{ x: -out.x, y: -out.y }], out)
+    .slice(0, -1)
+    .map((dir) => placeText(endAt, dir, 5));
+  const middle = shift(origin, (tip.x + tail.x) / 2, (tip.y + tail.y) / 2);
+  const beside = [
+    { x: -d.y, y: d.x },
+    { x: d.y, y: -d.x },
+  ].map((dir) => placeText(middle, dir, 6));
   return [
     ...arrow('loads', origin, tail, tip, 'load', LAYERS.load, {
       width: size.pointShaft,
@@ -1091,8 +1124,9 @@ const pointForceItems = (
       obstacle: true,
     }),
     {
-      ...text('loads', shift(origin, end.x, end.y), pull ? d : { x: -d.x, y: -d.y }, 5, content, 'load', LOAD_PRIORITY),
+      ...text('loads', endAt, out, 5, content, 'load', LOAD_PRIORITY),
       weight: bold ? 600 : undefined,
+      alternatives: [...round, ...beside],
     },
   ];
 };
@@ -1285,6 +1319,36 @@ const continuesLoad = (
   });
 };
 
+/**
+ * Whether the member before this load's, running on in line, carries a distributed load ending with
+ * the value this one starts with: written once at the joint, by that one's end.
+ */
+const sharesStart = (
+  model: PlotModel,
+  frames: ReadonlyMap<string, MemberFrame>,
+  load: Extract<PlotLoad, { kind: 'distributed' }>
+): boolean => {
+  const member = model.members.find((m) => m.id === load.member);
+  const f = frames.get(load.member);
+  if (!member || !f) return false;
+  return model.loads.some((other) => {
+    if (other === load || other.kind !== 'distributed' || other.local !== load.local) return false;
+    const prev = model.members.find((m) => m.id === other.member);
+    const g = frames.get(other.member);
+    return (
+      !!prev &&
+      !!g &&
+      prev.end === member.start &&
+      Math.abs(f.tx * g.tx + f.tz * g.tz - 1) < 1e-9 &&
+      other.end.fx === load.start.fx &&
+      other.end.fz === load.start.fz &&
+      // and that load writes its end: drawn (not all zero) and labelled (not itself a continuation)
+      (other.start.fx !== 0 || other.start.fz !== 0 || other.end.fx !== 0 || other.end.fz !== 0) &&
+      !continuesLoad(model, frames, other)
+    );
+  });
+};
+
 /** A distributed load with both components, as its two components: each a load of its own. */
 const splitComponents = (load: PlotLoad): PlotLoad[] => {
   if (load.kind !== 'distributed') return [load];
@@ -1384,7 +1448,17 @@ const loadItems = (
                 size.udlArrow + 2
               );
           items.push(
-            ...distributedItems(load, f, options, size, fmt, !continuesLoad(model, frames, load), offset, side)
+            ...distributedItems(
+              load,
+              f,
+              options,
+              size,
+              fmt,
+              !continuesLoad(model, frames, load),
+              offset,
+              side,
+              sharesStart(model, frames, load)
+            )
           );
         }
         break;
@@ -1737,19 +1811,31 @@ const diagramShape = (
   });
   if (closed[1]) outline.push({ op: 'L', p: at(f, f.length) });
 
+  // The area between the axis and the outline, closed to the axis at both ends whatever the outline does
+  const area: Segment[] = [{ op: 'M', p: at(f, 0) }];
+  pw.forEach((piece) => {
+    const v0 = evalPiece(piece, piece.x0);
+    area.push({ op: 'L', p: at(f, piece.x0, normal.x * k * v0, normal.y * k * v0) });
+    area.push(...pieceSegments(f, piece, k, normal));
+  });
+  area.push({ op: 'L', p: at(f, f.length) }, { op: 'Z' });
   const items: SceneItem[] = [
     { kind: 'path', group, layer: LAYERS.diagramLine, tone, width: 1.75, segments: outline, shield: true },
+    // The whole diagram, to point at, however it is filled
+    {
+      kind: 'path',
+      group,
+      layer: LAYERS.diagramFill,
+      tone,
+      width: 0,
+      fill: 'tone',
+      hitArea: true,
+      fitIgnore: true,
+      segments: area,
+    },
   ];
   if (fill === 'none') return items;
   if (fill === 'solid') {
-    // The area between the axis and the outline, closed to the axis at both ends whatever the outline does
-    const area: Segment[] = [{ op: 'M', p: at(f, 0) }];
-    pw.forEach((piece) => {
-      const v0 = evalPiece(piece, piece.x0);
-      area.push({ op: 'L', p: at(f, piece.x0, normal.x * k * v0, normal.y * k * v0) });
-      area.push(...pieceSegments(f, piece, k, normal));
-    });
-    area.push({ op: 'L', p: at(f, f.length) }, { op: 'Z' });
     items.push({
       kind: 'path',
       group,
@@ -1797,6 +1883,8 @@ interface LabelCandidate {
   readonly item: SceneText;
   readonly members: readonly string[];
   readonly magnitude: number;
+  /** Drawn with the label, and only with it (see SceneBase.requires) */
+  readonly marks?: readonly SceneItem[];
 }
 
 /** How far each of two values side by side stands off their shared ordinate line, px */
@@ -1946,7 +2034,13 @@ const diagramLabels = (
   // Written once mid-member, or at its ends as any other diagram
   const once = (pw: Piecewise) => options.constantDiagrams !== 'ends' && isConstant(pw);
 
-  const push = (places: readonly TextPlacement[], content: string, v: number, members: string[]) => {
+  const push = (
+    places: readonly TextPlacement[],
+    content: string,
+    v: number,
+    members: string[],
+    extreme?: { readonly marks: readonly SceneItem[] }
+  ) => {
     // A value that rounds to nothing in the chosen format (solver noise at a free end) is not written
     if (!/[1-9]/.test(content)) return;
     const [first, ...rest] = places;
@@ -1957,12 +2051,14 @@ const diagramLabels = (
         layer: LAYERS.label,
         text: content,
         tone,
-        priority: priority(v),
+        // A maximum inside a member is what a reader looks for first
+        priority: priority(v) + (extreme ? 0.5 : 0),
         ...first,
         alternatives: rest,
       },
       members,
       magnitude: Math.abs(v),
+      marks: extreme?.marks,
     });
   };
 
@@ -2068,7 +2164,27 @@ const diagramLabels = (
     for (const p of pw) {
       for (const x of pieceExtrema(p)) {
         const v = evalPiece(p, x);
-        if (Math.abs(v) > zero) push(spots(tipAt(x, v), outOf(v), mode), number(v), v, [m.id]);
+        if (Math.abs(v) <= zero) continue;
+        const marks: SceneItem[] = options.extremeOrdinates
+          ? [
+              {
+                kind: 'path',
+                group: q,
+                layer: LAYERS.diagramLine,
+                tone,
+                width: 1,
+                cap: 'butt',
+                segments: [
+                  { op: 'M', p: at(f, x) },
+                  { op: 'L', p: tipAt(x, v) },
+                ],
+              },
+            ]
+          : [];
+        // At its tip whatever crosses there, readable on its halo: other diagrams cross a maximum
+        // often (the shear is zero right under the moment's), and it is the value read first
+        const places = spots(tipAt(x, v), outOf(v), mode).map((place) => ({ ...place, acrossDiagrams: true }));
+        push(places, number(v), v, [m.id], { marks });
       }
     }
   }
@@ -2208,8 +2324,9 @@ const barForceLabels = (
 
 /**
  * Each member's name along it, at mid-length on the side away from its dashed fibres, as the app
- * writes it. Never upside down. Below every value in priority: when crowded, it slides along the
- * member, then crosses to the fibres' side, and gives way last.
+ * writes it. Never upside down. Below every value in priority: when another label is in the way, it
+ * slides along the member, then crosses to the fibres' side, and gives way last. A diagram's line
+ * does not move it.
  */
 const MEMBER_LABEL_PRIORITY = 3;
 const memberLabelItems = (model: PlotModel, frames: ReadonlyMap<string, MemberFrame>, size: Sizes): SceneItem[] =>
@@ -2217,8 +2334,11 @@ const memberLabelItems = (model: PlotModel, frames: ReadonlyMap<string, MemberFr
     const f = frames.get(m.id);
     if (!f) return [];
     let angle = (Math.atan2(f.tz, f.tx) * 180) / Math.PI;
-    if (angle > 90) angle -= 180;
-    if (angle <= -90) angle += 180;
+    // Along a vertical member the name reads upward, the head turned left, as the diagrams' values
+    // do (see tipPlacements); otherwise never upside down
+    if (Math.abs(Math.abs(angle) - 90) < 1e-6) angle = -90;
+    else if (angle > 90) angle -= 180;
+    else if (angle <= -90) angle += 180;
     const r = (angle * Math.PI) / 180;
     // "Up" as the text reads, whichever way the member was drawn
     const up = { x: Math.sin(r), y: -Math.cos(r) };
@@ -2228,10 +2348,13 @@ const memberLabelItems = (model: PlotModel, frames: ReadonlyMap<string, MemberFr
     const places: TextPlacement[] = [];
     for (const side of [away, -away]) {
       for (const t of [0.5, 0.4, 0.6, 0.3, 0.7, 0.2, 0.8]) {
+        // Across a diagram's line if need be, readable on its halo: a name stays by its member's
+        // middle, and slides along only for another label
         places.push({
           at: at(f, f.length * t, up.x * gap * side, up.y * gap * side),
           align: 'middle',
           baseline: side > 0 ? 'bottom' : 'top',
+          acrossDiagrams: true,
         });
       }
     }
@@ -2331,15 +2454,21 @@ const largestDisplacements = (
   }
   const largest = Math.max(0, ...peaks.map((p) => p.size));
   if (!(largest > 0)) return [];
-  // A peak at a shared node is one point: keep it once
-  const seen: { x: number; z: number }[] = [];
-  return peaks.filter((p) => {
-    if (p.size < largest * 0.999) return false;
-    const pt = pointAlong(frameOf(frames, p.member), p.x);
-    if (seen.some((o) => Math.hypot(o.x - pt.x, o.z - pt.z) < 1e-6)) return false;
-    seen.push(pt);
-    return true;
-  });
+  // One peak is one point, however many members find it: at a node they share, or a little either
+  // side of it where a member was split there. Equal peaks well apart (two spans alike) both stay.
+  const seen: { x: number; z: number; near: number }[] = [];
+  return [...peaks]
+    .sort((a, b) => b.size - a.size)
+    .filter((p) => {
+      if (p.size < largest * 0.999) return false;
+      const f = frameOf(frames, p.member);
+      const pt = pointAlong(f, p.x);
+      const near = 0.1 * f.length;
+      // Within a tenth of the shorter member: a long member does not swallow a distinct point near it
+      if (seen.some((o) => Math.hypot(o.x - pt.x, o.z - pt.z) < Math.max(Math.min(near, o.near), 1e-6))) return false;
+      seen.push({ ...pt, near });
+      return true;
+    });
 };
 
 /* ── Putting it together ────────────────────────────────────────────────────────────────────── */
@@ -2399,8 +2528,9 @@ export const buildStructureScene = (model: PlotModel, options: StructureSceneOpt
   const results = model.results;
   if (results) {
     const k = diagramScales(model, options);
-    /** The diagrams' values, placed together once all are known */
+    /** The diagrams' values, placed together once all are known, and what is drawn with each */
     const values: SceneText[] = [];
+    const valueMarks: SceneItem[][] = [];
     for (const q of ['N', 'V', 'M'] as const) {
       if (!layers.has(q) || !(k[q] > 0)) continue;
       if (q === 'N' && isBarStructure(model, results.members)) {
@@ -2427,14 +2557,16 @@ export const buildStructureScene = (model: PlotModel, options: StructureSceneOpt
         }
       }
       const labels = diagramLabels(model, frames, results.members, q, k[q], side, options);
-      values.push(
-        ...(options.compact ? limitPerMember(labels, 2) : labels).map((c) => ({
-          ...c.item,
-          entity: memberEntity(c.members[0]),
-        }))
-      );
+      for (const c of options.compact ? limitPerMember(labels, 2) : labels) {
+        const entity = memberEntity(c.members[0]);
+        values.push({ ...c.item, entity });
+        valueMarks.push((c.marks ?? []).map((mark) => ({ ...mark, entity })));
+      }
     }
-    items.push(...(options.sideBySide ? sideBySide(values, options.fontSize ?? 13) : values));
+    const placed = options.sideBySide ? sideBySide(values, options.fontSize ?? 13) : values;
+    items.push(...placed);
+    // Each mark with the label it belongs to, as finally placed
+    placed.forEach((label, i) => items.push(...valueMarks[i].map((mark) => ({ ...mark, requires: label }))));
     if (layers.has('w') && k.w > 0) {
       for (const m of model.members) {
         const r = results.members[m.id];
@@ -2445,20 +2577,68 @@ export const buildStructureScene = (model: PlotModel, options: StructureSceneOpt
         const f = frameOf(frames, peak.member);
         const d = { x: peak.u * f.tx + peak.w * f.nx, y: peak.u * f.tz + peak.w * f.nz };
         const p = at(f, peak.x, k.w * d.x, k.w * d.y);
-        items.push({
+        const entity = memberEntity(peak.member);
+        const out = unit(d.x, d.y);
+        // Anywhere round its point, as it labels a point: out from the member first, then turning
+        // round to the inside, close in and then a little further
+        const ring = [0, 45, -45, 90, -90, 135, -135, 180].map((deg) => {
+          const r = (deg * Math.PI) / 180;
+          return { x: out.x * Math.cos(r) - out.y * Math.sin(r), y: out.x * Math.sin(r) + out.y * Math.cos(r) };
+        });
+        const [first, ...rest] = [5, 12].flatMap((gap) =>
+          ring.map((dir) => ({ ...placeText(p, dir, gap), acrossDiagrams: true }))
+        );
+        const label: SceneText = {
           ...text(
             'w',
             p,
-            unit(d.x, d.y),
+            out,
             5,
             options.displacementText
               ? options.displacementText(peak.size * options.units.displacement.scale)
               : formatNumber(peak.size * options.units.displacement.scale, options.numberFormat),
             'deformed',
-            7
+            // After every maximum (6.5 and up, see diagramLabels) and the larger end values (6 and a
+            // share of the largest), which have only their tip to stand at, while this can go anywhere
+            // round its point; before the smaller ones
+            6.49
           ),
-          entity: memberEntity(peak.member),
-        });
+          ...first,
+          alternatives: rest,
+          entity,
+        };
+        items.push(label);
+        if (options.displacementMarker) {
+          items.push(
+            {
+              kind: 'path',
+              group: 'w',
+              layer: LAYERS.deformed,
+              tone: 'deformed',
+              width: 0.75,
+              dash: '3 2',
+              cap: 'butt',
+              segments: [
+                { op: 'M', p: at(f, peak.x) },
+                { op: 'L', p },
+              ],
+              entity,
+              requires: label,
+            },
+            {
+              kind: 'circle',
+              group: 'w',
+              layer: LAYERS.deformed,
+              at: p,
+              r: 2.5,
+              tone: 'deformed',
+              width: 0,
+              fill: 'tone',
+              entity,
+              requires: label,
+            }
+          );
+        }
       }
     }
   }
@@ -2470,8 +2650,11 @@ export const buildStructureScene = (model: PlotModel, options: StructureSceneOpt
   if (layers.has('memberLabels')) items.push(...memberLabelItems(model, frames, size));
   if (layers.has('dimensions')) items.push(...dimensionItems(model, frames, options, fmt));
   // Bare numbers for loads written at their ends, as the editor does
+  const loadFormat = options.loadNumberFormat ?? options.numberFormat;
   const loadFmt =
-    options.loadLabels === 'ends' ? (v: number, u: Unit) => formatNumber(v * u.scale, options.numberFormat) : fmt;
+    options.loadLabels === 'ends'
+      ? (v: number, u: Unit) => formatNumber(v * u.scale, loadFormat)
+      : (v: number, u: Unit) => formatQuantity(v, u, loadFormat);
   if (layers.has('loads')) items.push(...loadItems(model, frames, options, size, loadFmt));
   if (layers.has('reactions')) {
     const reactions = options.reactionLabels === 'names' ? unknownReactions(model) : results?.reactions;

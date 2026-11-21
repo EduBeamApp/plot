@@ -64,6 +64,11 @@ interface SceneBase {
    * `node:<id>`, or a load's own `source`. Items of nothing in particular (dimensions) have none.
    */
   readonly entity?: string;
+  /**
+   * Drawn only when this label is: a mark that points at a value (a maximum's ordinate, the largest
+   * displacement's dot) goes with the value when there is no room for it, rather than point at nothing.
+   */
+  readonly requires?: SceneText;
 }
 
 export interface ScenePath extends SceneBase {
@@ -184,6 +189,62 @@ const charWidth = (ch: string): number => {
 
 export const textWidth = (text: string, size: number): number =>
   [...text].reduce((w, ch) => w + charWidth(ch), 0) * size;
+
+/** A superscript's size, and how far it rises above the baseline, as shares of its text's size */
+export const SUP_SCALE = 0.75;
+export const SUP_RISE = 0.38;
+
+const SUPERSCRIPT_DIGITS: Readonly<Record<string, string>> = {
+  '⁰': '0',
+  '¹': '1',
+  '²': '2',
+  '³': '3',
+  '⁴': '4',
+  '⁵': '5',
+  '⁶': '6',
+  '⁷': '7',
+  '⁸': '8',
+  '⁹': '9',
+  '⁻': '−',
+  '⁺': '+',
+};
+
+/** A piece of a label: written on the line, or raised as a superscript and smaller */
+export interface TextRun {
+  readonly text: string;
+  /** The size it is written at, px, where it is not the label's own */
+  readonly size?: number;
+  /** How far it moves the baseline, px: up into a superscript, back down after it */
+  readonly dy?: number;
+}
+
+/**
+ * A label's text in runs, its superscript characters (a power of ten, `1.71·10⁻³`) as a real
+ * superscript: plain digits, smaller and raised, rather than the font's tiny superscript glyphs.
+ */
+export const textRuns = (text: string, size: number): TextRun[] => {
+  const runs: TextRun[] = [];
+  let up = false;
+  for (const ch of text) {
+    const sup = SUPERSCRIPT_DIGITS[ch];
+    const raised = sup !== undefined;
+    const last = runs[runs.length - 1];
+    if (last && raised === up) {
+      runs[runs.length - 1] = { ...last, text: last.text + (sup ?? ch) };
+      continue;
+    }
+    const rise = round2(size * SUP_RISE);
+    runs.push(
+      raised
+        ? { text: sup, size: round2(size * SUP_SCALE), dy: -rise }
+        : { text: ch, ...(runs.length > 0 ? { dy: rise } : {}) }
+    );
+    up = raised;
+  }
+  return runs;
+};
+
+const round2 = (v: number) => Math.round(v * 100) / 100;
 
 /** A subscript's size, as a share of its text's */
 export const SUB_SCALE = 0.75;
@@ -426,6 +487,11 @@ export const pathData = (segments: readonly Segment[], t: Transform): string =>
 const overlaps = (a: Bounds, b: Bounds, margin: number): boolean =>
   a.minX < b.maxX + margin && b.minX < a.maxX + margin && a.minY < b.maxY + margin && b.minY < a.maxY + margin;
 
+/** How much of two boxes lies in both, px² */
+const overlapArea = (a: Bounds, b: Bounds): number =>
+  Math.max(0, Math.min(a.maxX, b.maxX) - Math.max(a.minX, b.minX)) *
+  Math.max(0, Math.min(a.maxY, b.maxY) - Math.max(a.minY, b.minY));
+
 /** Whether the segment p–q passes through the box (Liang-Barsky clipping). */
 export const segmentHitsBox = (p: readonly [number, number], q: readonly [number, number], box: Bounds): boolean => {
   const dx = q[0] - p[0];
@@ -481,7 +547,10 @@ export interface ResolveOptions {
    * internal forces' values may lie over a band's side).
    */
   readonly yieldingGroups?: ReadonlySet<string>;
-  /** Groups whose labels are never left out: with no free place, at their first place all the same. */
+  /**
+   * Groups whose labels are never left out: with no free place, at the place that covers the least
+   * of the labels already kept (its first place among equals).
+   */
   readonly keptGroups?: ReadonlySet<string>;
 }
 
@@ -625,7 +694,16 @@ export const placeLabels = (
   const yielding = options.yieldingGroups;
   const late = (label: SceneText) =>
     yielding?.has(label.group) ? 3 : alternativeGroups.has(label.group) ? 2 : lateGroups?.has(label.group) ? 1 : 0;
-  texts.sort((a, b) => late(a.item) - late(b.item) || b.item.priority - a.item.priority || a.i - b.i);
+  // Among equal given data, the label with the fewest places goes first: one with a single place (a
+  // load's value at its end) takes it before a label that could stand elsewhere (a nodal force's)
+  // takes it from it - and is then kept on top of it, never being left out. Other labels keep their
+  // order, so figures without such a clash are laid out as before.
+  const places = (label: SceneText) =>
+    options.keptGroups?.has(label.group) ? 1 + (label.alternatives?.length ?? 0) : 0;
+  texts.sort(
+    (a, b) =>
+      late(a.item) - late(b.item) || b.item.priority - a.item.priority || places(a.item) - places(b.item) || a.i - b.i
+  );
   // Both indexed by where they are, so a label is tested only against what lies near it
   type Kept = { box: Bounds; group: string };
   const kept = new Grid<Kept>(GRID_PX);
@@ -702,12 +780,22 @@ export const placeLabels = (
         break place;
       }
     }
-    // Given data is never left out
+    // Given data is never left out: with no free place, at the place that covers the least of the
+    // labels already kept - not its first by default, where it may sit right on another value
     if (!result.has(item) && options.keptGroups?.has(item.group)) {
-      const box = textBounds(item, t, options.fontSize);
-      if (!vp || (box.minX >= 0 && box.minY >= 0 && box.maxX <= vp.width && box.maxY <= vp.height)) {
-        kept.add(box, { box, group: item.group });
-        result.set(item, item);
+      let best: { variant: SceneText; box: Bounds; covered: number } | null = null;
+      for (const variant of variants) {
+        const box = textBounds(variant, t, options.fontSize);
+        if (vp && (box.minX < 0 || box.minY < 0 || box.maxX > vp.width || box.maxY > vp.height)) continue;
+        const covered = kept
+          .near(box, seenKept)
+          .filter((k) => competes(k.group, item.group))
+          .reduce((sum, k) => sum + overlapArea(k.box, box), 0);
+        if (best === null || covered < best.covered) best = { variant, box, covered };
+      }
+      if (best) {
+        kept.add(best.box, { box: best.box, group: item.group });
+        result.set(item, best.variant);
       }
     }
   }
@@ -763,6 +851,7 @@ export const resolveScene = (items: readonly SceneItem[], t: Transform, options:
   const texts: ResolvedText[] = [];
 
   for (const item of items) {
+    if (item.kind !== 'text' && item.requires && !keep.has(item.requires)) continue;
     if (item.kind === 'path') {
       paths.push({
         group: item.group,

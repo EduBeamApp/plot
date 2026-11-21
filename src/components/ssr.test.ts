@@ -59,7 +59,8 @@ describe('both components on the server', () => {
     const html = await render(() => [
       h(StructurePlot, { solver, layers: ['members', 'supports', 'reactions'], reactionLabels: 'names', width: 400 }),
     ]);
-    expect(html).toMatch(/class="ebp-halo"[^>]*font-style="italic"[^>]*>1<tspan[^>]*>x<\/tspan>/);
-    expect(html).toMatch(/class="ebp-nohalo"[^>]*font-style="italic"[^>]*>1<tspan[^>]*>x<\/tspan>/);
+    // Vue's server rendering marks a list with comments, which a browser ignores
+    expect(html).toMatch(/class="ebp-halo"[^>]*font-style="italic"[^>]*>1(<!--[^>]*-->)*<tspan[^>]*>x<\/tspan>/);
+    expect(html).toMatch(/class="ebp-nohalo"[^>]*font-style="italic"[^>]*>1(<!--[^>]*-->)*<tspan[^>]*>x<\/tspan>/);
   });
 });

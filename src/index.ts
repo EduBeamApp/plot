@@ -60,6 +60,8 @@ export {
   resolveScene,
   mergePaths,
   sceneBounds,
+  textRuns,
+  type TextRun,
   project,
   type Anchor,
   type Fit,

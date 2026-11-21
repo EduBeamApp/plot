@@ -10,7 +10,7 @@ import { computed, onBeforeUnmount, onMounted, ref, toRaw, useId, watch } from '
 import { modelFromSolver } from '../core/fromSolver';
 import type { PlotModel } from '../core/model';
 import { layoutStructure } from '../core/layout';
-import { SUB_DROP, SUB_SCALE, textWidth, type Tone } from '../core/scene';
+import { SUB_DROP, SUB_SCALE, textRuns, textWidth, type ResolvedText, type Tone } from '../core/scene';
 import {
   defaultResultLayer,
   diagramScales,
@@ -120,6 +120,14 @@ const colour = (tone: Tone | 'paper') => `var(--ebp-${tone})`;
 const rootStyle = computed(() => toneVars(props.colors));
 
 const texts = usePlotTexts();
+
+/** A label's text in runs: a power of ten's exponent raised (see textRuns) */
+const runsOf = (t: ResolvedText) => textRuns(t.text, t.size ?? fontSize.value);
+/**
+ * A label in more than one run gets its halo as a text of its own underneath: painted per run,
+ * a subscript's or superscript's halo would cover the end of the letter before it.
+ */
+const split = (t: ResolvedText) => Boolean(t.sub) || runsOf(t).length > 1;
 const label = computed(() => props.title || texts.value.structure([...shown.value]));
 
 /* ── Reading values: only with `hover`, so a static plot never takes the pointer ─────────── */
@@ -243,7 +251,7 @@ const pill = computed(() => {
           <!-- A label with a subscript gets its halo as a text of its own underneath: painted per run,
                the subscript's halo would cover the end of the letter before it -->
           <text
-            v-if="t.sub"
+            v-if="split(t)"
             class="ebp-halo"
             aria-hidden="true"
             :x="t.x"
@@ -255,13 +263,14 @@ const pill = computed(() => {
             :font-size="t.size"
             :font-style="t.italic ? 'italic' : undefined"
           >
-            {{ t.text
-            }}<tspan :font-size="(t.size ?? fontSize) * SUB_SCALE" :dy="(t.size ?? fontSize) * SUB_DROP">{{
+            {{ runsOf(t)[0]?.text
+            }}<tspan v-for="(r, k) in runsOf(t).slice(1)" :key="k" :font-size="r.size" :dy="r.dy">{{ r.text }}</tspan
+            ><tspan v-if="t.sub" :font-size="(t.size ?? fontSize) * SUB_SCALE" :dy="(t.size ?? fontSize) * SUB_DROP">{{
               t.sub
             }}</tspan>
           </text>
           <text
-            :class="{ 'ebp-nohalo': t.sub }"
+            :class="{ 'ebp-nohalo': split(t) }"
             :x="t.x"
             :y="t.y"
             :text-anchor="t.anchor"
@@ -271,8 +280,9 @@ const pill = computed(() => {
             :font-size="t.size"
             :font-style="t.italic ? 'italic' : undefined"
           >
-            {{ t.text
-            }}<tspan v-if="t.sub" :font-size="(t.size ?? fontSize) * SUB_SCALE" :dy="(t.size ?? fontSize) * SUB_DROP">{{
+            {{ runsOf(t)[0]?.text
+            }}<tspan v-for="(r, k) in runsOf(t).slice(1)" :key="k" :font-size="r.size" :dy="r.dy">{{ r.text }}</tspan
+            ><tspan v-if="t.sub" :font-size="(t.size ?? fontSize) * SUB_SCALE" :dy="(t.size ?? fontSize) * SUB_DROP">{{
               t.sub
             }}</tspan>
           </text>
