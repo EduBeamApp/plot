@@ -2,6 +2,8 @@
 
 All notable changes to `@edubeam/plot` are listed here. The project follows [Semantic Versioning](https://semver.org).
 
+## 0.3.2 (2026-11-21)
+
 ## unreleased
 
 - A member's name keeps off its loads' arrows: kept off one side at mid-span, by a point load or a distributed
