@@ -2,6 +2,15 @@
 
 All notable changes to `@edubeam/plot` are listed here. The project follows [Semantic Versioning](https://semver.org).
 
+## unreleased
+
+- A member's name keeps off its loads' arrows: kept off one side at mid-span, by a point load or a distributed
+  load's arrows, it crosses to the other side of the member at the middle, clear of the dashed fibres there,
+  and is moved along the member only a few px, giving way rather than sliding off down it.
+- A diagram's value keeps off a point load's arrow: a moment peaking under a point load has its value beside
+  the arrow, at its tip, not over it.
+- A scene path's `keptOffBy` names the label groups that may not cover it, whatever else holds.
+
 ## 0.3.1 (2026-11-21)
 
 - Every diagram has an undrawn `hitArea` path covering it, whatever its fill, tagged with its member, so an app

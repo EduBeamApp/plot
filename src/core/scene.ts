@@ -92,6 +92,11 @@ export interface ScenePath extends SceneBase {
    * diagram's outline, which its own numbers sit against.
    */
   readonly shield?: boolean;
+  /**
+   * Labels of these groups may not cover this line, wherever else they may go, diagrams crossed or
+   * not: a member's name keeps off its loads' arrows. Everything else may cover it.
+   */
+  readonly keptOffBy?: readonly string[];
   /** Drawn on from start to end when it appears; the number staggers members one after another. */
   readonly draw?: number;
   /**
@@ -641,13 +646,30 @@ export const placeLabels = (
   t: Transform,
   options: ResolveOptions
 ): Map<SceneText, SceneText> => {
-  /** Segments labels keep off, px, with their padding and, for a shield, the group it belongs to. */
-  type Obstacle = [[number, number], [number, number], number, string | null, string];
+  /**
+   * Segments labels keep off, px, with their padding, for a shield the group it belongs to, the
+   * groups whose labels it keeps off whatever else holds (keptOffBy), and whether those are all it
+   * keeps off - a line that is neither an obstacle nor a shield.
+   */
+  type Obstacle = [
+    [number, number],
+    [number, number],
+    number,
+    string | null,
+    string,
+    readonly string[] | undefined,
+    boolean,
+  ];
   const obstacles: Obstacle[] = [];
   for (const item of items) {
-    if (item.kind !== 'path' || !(item.obstacle || (item.shield && (options.shields?.has(item.group) ?? true))))
+    if (
+      item.kind !== 'path' ||
+      !(item.obstacle || item.keptOffBy || (item.shield && (options.shields?.has(item.group) ?? true)))
+    )
       continue;
     const owner = item.obstacle ? null : item.group;
+    const only = item.keptOffBy;
+    const onlyThose = !item.obstacle && !item.shield;
     const pad = item.width / 2 + 1;
     let prev: [number, number] | null = null;
     for (const seg of item.segments) {
@@ -664,7 +686,7 @@ export const placeLabels = (
         for (let i = 1; i <= 12; i++) {
           const a = a0 + ((a1 - a0) * i) / 12;
           const q: [number, number] = [cx + seg.r * Math.cos(a), cy + seg.r * Math.sin(a)];
-          obstacles.push([last, q, pad, owner, item.group]);
+          obstacles.push([last, q, pad, owner, item.group, only, onlyThose]);
           last = q;
         }
       } else if (seg.op === 'C' && prev) {
@@ -679,10 +701,10 @@ export const placeLabels = (
             v * v * v * prev[0] + 3 * v * v * u * c1[0] + 3 * v * u * u * c2[0] + u * u * u * p[0],
             v * v * v * prev[1] + 3 * v * v * u * c1[1] + 3 * v * u * u * c2[1] + u * u * u * p[1],
           ];
-          obstacles.push([last, q, pad, owner, item.group]);
+          obstacles.push([last, q, pad, owner, item.group, only, onlyThose]);
           last = q;
         }
-      } else if (prev && seg.op !== 'M') obstacles.push([prev, p, pad, owner, item.group]);
+      } else if (prev && seg.op !== 'M') obstacles.push([prev, p, pad, owner, item.group, only, onlyThose]);
       prev = p;
     }
   }
@@ -743,10 +765,13 @@ export const placeLabels = (
       (x - ax) * s + (y - ay) * c,
     ];
     const own = textBox(item.text, item.size ?? options.fontSize, item.align, item.baseline, item.sub);
-    const blocks = (owner: string | null, group: string) =>
-      // A yielding group's lines keep only its own labels off
-      (!yielding?.has(group) || group === item.group) &&
-      (owner === null || (!acrossDiagrams && owner !== item.group && !alternativeGroups.has(item.group)));
+    const blocks = (owner: string | null, group: string, only: readonly string[] | undefined, onlyThose: boolean) =>
+      // The labels a line keeps off whatever else holds (keptOffBy), a yielding group's included
+      only?.includes(item.group) === true ||
+      (!onlyThose &&
+        // A yielding group's lines keep only its own labels off
+        (!yielding?.has(group) || group === item.group) &&
+        (owner === null || (!acrossDiagrams && owner !== item.group && !alternativeGroups.has(item.group))));
     const reach = {
       minX: box.minX - maxPad,
       maxX: box.maxX + maxPad,
@@ -754,8 +779,8 @@ export const placeLabels = (
       maxY: box.maxY + maxPad,
     };
     const hit = lines.near(reach, seenLines).some(
-      ([p, q, pad, owner, group]) =>
-        blocks(owner, group) &&
+      ([p, q, pad, owner, group, only, onlyThose]) =>
+        blocks(owner, group, only, onlyThose) &&
         segmentHitsBox(local(p), local(q), {
           minX: own.x0 - pad + 1,
           maxX: own.x1 + pad - 1,

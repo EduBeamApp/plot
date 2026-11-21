@@ -353,7 +353,14 @@ const arrow = (
   tip: Vec,
   tone: Tone,
   layer: ScenePath['layer'],
-  style: { width: number; head: number; headWidth: number; dash?: string; obstacle?: boolean }
+  style: {
+    width: number;
+    head: number;
+    headWidth: number;
+    dash?: string;
+    obstacle?: boolean;
+    keptOffBy?: readonly string[];
+  }
 ): ScenePath[] => {
   const d = unit(tip.x - tail.x, tip.y - tail.y);
   const half = style.headWidth / 2;
@@ -368,6 +375,7 @@ const arrow = (
       dash: style.dash,
       cap: 'butt',
       obstacle: style.obstacle,
+      keptOffBy: style.keptOffBy,
       segments: [
         { op: 'M', p: shift(origin, tail.x, tail.y) },
         // Into the head a little, so no gap shows between shaft and head.
@@ -383,6 +391,7 @@ const arrow = (
       fill: 'tone',
       // The head is as much in the way of a label as the shaft
       obstacle: style.obstacle,
+      keptOffBy: style.keptOffBy,
       segments: [
         { op: 'M', p: shift(origin, tip.x, tip.y) },
         { op: 'L', p: shift(origin, base.x - d.y * half, base.y + d.x * half) },
@@ -1122,6 +1131,9 @@ const pointForceItems = (
       head: size.pointHead,
       headWidth: size.pointHeadWidth,
       obstacle: true,
+      // The diagrams' values too: a point load is where a moment peaks, its value at the same point,
+      // which steps beside the arrow rather than over it (or gives way)
+      keptOffBy: RESULT_LAYERS,
     }),
     {
       ...text('loads', endAt, out, 5, content, 'load', LOAD_PRIORITY),
@@ -2324,11 +2336,14 @@ const barForceLabels = (
 
 /**
  * Each member's name along it, at mid-length on the side away from its dashed fibres, as the app
- * writes it. Never upside down. Below every value in priority: when another label is in the way, it
- * slides along the member, then crosses to the fibres' side, and gives way last. A diagram's line
- * does not move it.
+ * writes it. Never upside down. Below every value in priority: when another label or a load's arrow
+ * is in the way, it crosses to the fibres' side at the middle, then moves a little along the member,
+ * and gives way last. A diagram's line does not move it.
  */
 const MEMBER_LABEL_PRIORITY = 3;
+const NAMES: readonly string[] = ['memberLabels'];
+/** How far a member's name may move along it from the middle, px: the middle first */
+const NAME_NUDGES_PX = [0, 12, -12, 24, -24] as const;
 const memberLabelItems = (model: PlotModel, frames: ReadonlyMap<string, MemberFrame>, size: Sizes): SceneItem[] =>
   model.members.flatMap((m): SceneItem[] => {
     const f = frames.get(m.id);
@@ -2344,14 +2359,24 @@ const memberLabelItems = (model: PlotModel, frames: ReadonlyMap<string, MemberFr
     const up = { x: Math.sin(r), y: -Math.cos(r) };
     // The fibres lie on local +z, (nx, nz): the name goes to the other side first
     const away = f.nx * up.x + f.nz * up.y > 0 ? -1 : 1;
-    const gap = size.member / 2 + 3;
+    // Clear of the member's stroke, and on the fibres' side of their dashed line too
+    const gapOf = (side: number) => size.member / 2 + 3 + (side === away ? 0 : FIBRE_GAP + FIBRE_WIDTH);
+    // Along the member as the text runs, px
+    const along = { x: Math.cos(r), y: Math.sin(r) };
     const places: TextPlacement[] = [];
-    for (const side of [away, -away]) {
-      for (const t of [0.5, 0.4, 0.6, 0.3, 0.7, 0.2, 0.8]) {
-        // Across a diagram's line if need be, readable on its halo: a name stays by its member's
-        // middle, and slides along only for another label
+    // The middle on both sides first: a name kept off one side crosses to the other, a few px away.
+    // Then nudged along, never further than a name's width or two: slid off down the member it
+    // looked lost, and it gives way rather than wander
+    for (const nudge of NAME_NUDGES_PX) {
+      for (const side of [away, -away]) {
+        // Across a diagram's line if need be, readable on its halo
         places.push({
-          at: at(f, f.length * t, up.x * gap * side, up.y * gap * side),
+          at: at(
+            f,
+            f.length / 2,
+            up.x * gapOf(side) * side + along.x * nudge,
+            up.y * gapOf(side) * side + along.y * nudge
+          ),
           align: 'middle',
           baseline: side > 0 ? 'bottom' : 'top',
           acrossDiagrams: true,
@@ -2655,7 +2680,14 @@ export const buildStructureScene = (model: PlotModel, options: StructureSceneOpt
     options.loadLabels === 'ends'
       ? (v: number, u: Unit) => formatNumber(v * u.scale, loadFormat)
       : (v: number, u: Unit) => formatQuantity(v, u, loadFormat);
-  if (layers.has('loads')) items.push(...loadItems(model, frames, options, size, loadFmt));
+  // A member's name keeps off its loads' arrows: at mid-span, where a point load or a distributed
+  // load's middle arrow stands, it hid them (see memberLabelItems for where it goes instead)
+  if (layers.has('loads'))
+    items.push(
+      ...loadItems(model, frames, options, size, loadFmt).map((item) =>
+        item.kind === 'path' && !item.hitArea ? { ...item, keptOffBy: [...(item.keptOffBy ?? []), ...NAMES] } : item
+      )
+    );
   if (layers.has('reactions')) {
     const reactions = options.reactionLabels === 'names' ? unknownReactions(model) : results?.reactions;
     if (reactions) items.push(...reactionItems(model, reactions, options, size));

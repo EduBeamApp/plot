@@ -784,6 +784,41 @@ describe('the largest displacement', () => {
 });
 
 describe("a member's name", () => {
+  // As the app places its labels: the loads' own lines keep only their own labels off
+  const appLike = { fontSize: 13, yieldingGroups: new Set(['loads']), lateGroups: new Set(['M', 'memberLabels']) };
+  const placedAt = (layers: PlotLayer[], extra = {}) => {
+    const solver = S.simplySupportedPointLoad(6, 20e3, 3);
+    const first = scene(solver, layers, { scale: 1, ...extra });
+    const fit = fitScene(first, { width: 600, height: 300, padding: 20, fontSize: 13 });
+    const items = scene(solver, layers, { scale: fit.s, ...extra });
+    const placed = placeLabels(items, fit, { ...appLike, viewport: fit });
+    const pick = (group: string) => {
+      const label = texts(items).find((t) => t.group === group)!;
+      const at = placed.get(label);
+      return at ? project(fit, at.at) : null;
+    };
+    return { pick, fit };
+  };
+
+  it("crosses to the member's other side, at the middle, off a point load's arrow there", () => {
+    const { pick, fit } = placedAt(['members', 'memberLabels', 'loads']);
+    const name = pick('memberLabels')!;
+    const [mx, my] = project(fit, anchor(3, 0));
+    // Under the beam, the arrow coming from above, and still at the middle
+    expect(name[1]).toBeGreaterThan(my);
+    expect(Math.abs(name[0] - mx)).toBeLessThan(1);
+  });
+
+  it("leaves a moment value beside a point load's arrow, not over it", () => {
+    // The moment drawn on the arrow's side, where the peak's value would stand on the arrow
+    const { pick, fit } = placedAt(['members', 'loads', 'M'], { momentOnTensionSide: false });
+    const peak = pick('M');
+    if (peak === null) return; // given way, as a value may
+    const [mx] = project(fit, anchor(3, 0));
+    // Its text starts beside the shaft
+    expect(Math.abs(peak[0] - mx)).toBeGreaterThanOrEqual(4);
+  });
+
   it('may cross a diagram line rather than leave its middle', () => {
     const name = texts(scene(S.simplySupportedUdl(), ['members', 'memberLabels'])).find(
       (t) => t.group === 'memberLabels'
