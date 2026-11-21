@@ -2,6 +2,8 @@
 
 All notable changes to `@edubeam/plot` are listed here. The project follows [Semantic Versioning](https://semver.org).
 
+## 0.3.3 (2026-11-21)
+
 ## unreleased
 
 - A member end's value stands on its own member's side of the node, never reaching past the end over the next
