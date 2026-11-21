@@ -45,6 +45,7 @@ import {
   type TextBaseline,
   type TextPlacement,
   type Tone,
+  textBox,
   textWidth,
 } from './scene';
 import {
@@ -1770,15 +1771,18 @@ const degreeLabels = (
     }
     if (degree < 0 || (piece.x1 - piece.x0) * options.scale < fontSize * 1.5) return [];
     // A degree belongs to the whole piece, not a point: when another diagram's mark stands at the
-    // middle, it slides along the piece
-    const places = [0.5, 0.35, 0.65, 0.25, 0.75].map((t): TextPlacement => {
-      const x = piece.x0 + t * (piece.x1 - piece.x0);
-      const v = evalPiece(piece, x);
-      const reach = Math.abs(v * k);
-      const out = Math.sign(v) || 1;
-      const fromAxis = reach >= 2 * fontSize ? (v * k) / 2 : v * k + out * fontSize * 0.9;
-      return { at: at(f, x, normal.x * fromAxis, normal.y * fromAxis), align: 'middle', baseline: 'middle' };
-    });
+    // middle, it moves a few px along the piece, staying on it
+    const halfPx = ((piece.x1 - piece.x0) * options.scale) / 2 - fontSize;
+    const places = LABEL_NUDGES_PX.filter((nudge) => Math.abs(nudge) <= Math.max(0, halfPx)).map(
+      (nudge): TextPlacement => {
+        const x = (piece.x0 + piece.x1) / 2 + nudge / options.scale;
+        const v = evalPiece(piece, x);
+        const reach = Math.abs(v * k);
+        const out = Math.sign(v) || 1;
+        const fromAxis = reach >= 2 * fontSize ? (v * k) / 2 : v * k + out * fontSize * 0.9;
+        return { at: at(f, x, normal.x * fromAxis, normal.y * fromAxis), align: 'middle', baseline: 'middle' };
+      }
+    );
     const [first, ...rest] = places;
     return [
       {
@@ -2088,18 +2092,43 @@ const diagramLabels = (
       const n = normalOf(f);
       // The member leaves the node this way.
       const away = end === 0 ? { x: f.tx, y: f.tz } : { x: -f.tx, y: -f.tz };
-      return [
-        {
-          m,
-          f,
-          v,
-          away,
-          out: { x: n.x * Math.sign(v), y: n.y * Math.sign(v) },
-          tip: at(f, x, n.x * k * v, n.y * k * v),
-        },
-      ];
+      const out = { x: n.x * Math.sign(v), y: n.y * Math.sign(v) };
+      // Where the diagram is constant up to the end (a normal force along a bar), the same value
+      // stands at points a little in from the end: room for it when its tip is crowded, so the
+      // member keeps a value, near its end rather than in its middle
+      const inward = END_INWARD_PX.flatMap((px) => {
+        const d = px / options.scale;
+        if (!(d < f.length / 2)) return [];
+        const xi = end === 0 ? d : f.length - d;
+        return close(valueAt(pw, xi, end === 0 ? 'right' : 'left'), v) ? [at(f, xi, n.x * k * v, n.y * k * v)] : [];
+      });
+      return [{ m, f, v, away, out, tip: at(f, x, n.x * k * v, n.y * k * v), inward }];
     });
     if (ends.length === 0) continue;
+
+    /**
+     * An end's value at its tip, on the ordinate or beside it on its own member's side, never reaching
+     * past the end over the next member, where it reads as that member's (two values on one line still
+     * go either side of it, see sideBySide). Crowded, further out along the ordinate, and only then a
+     * little in along a constant diagram's edge (see `inward`).
+     */
+    const endPlaces = (e: (typeof ends)[number], content: string): TextPlacement[] => {
+      const size = options.fontSize ?? 13;
+      // How far the text's middle stands from the tip along the member, into it positive, px
+      const into = (place: TextPlacement) => {
+        const b = textBox(content, place.size ?? size, place.align, place.baseline);
+        const r = ((place.rotate ?? 0) * Math.PI) / 180;
+        const cx = (b.x0 + b.x1) / 2;
+        const cy = (b.y0 + b.y1) / 2;
+        const x = place.at.dx - e.tip.dx + cx * Math.cos(r) - cy * Math.sin(r);
+        const y = place.at.dy - e.tip.dy + cx * Math.sin(r) + cy * Math.cos(r);
+        return x * e.away.x + y * e.away.y;
+      };
+      const ownSide = (place: TextPlacement) => into(place) >= -2;
+      const atTip = spots(e.tip, e.out, mode).filter(ownSide);
+      const furtherOut = tipPlacements(e.tip, e.out, mode, END_FURTHER_OUT_PX).filter(ownSide);
+      return [...atTip, ...furtherOut, ...e.inward.flatMap((tip) => spots(tip, e.out, mode))];
+    };
 
     // A moment is continuous round a rigid joint: one value, written once. A shear or normal force of
     // the same size on both sides of a support is a step, and both its values are written.
@@ -2138,10 +2167,11 @@ const diagramLabels = (
           e.out.x * o.out.x + e.out.y * o.out.y > 0.995
       );
       written.add(e);
+      const content = number(e.v);
       if (on) {
         written.add(on);
-        push([...spots(e.tip, e.out, mode), ...spots(on.tip, on.out, mode)], number(e.v), e.v, [e.m.id, on.m.id]);
-      } else push(spots(e.tip, e.out, mode), number(e.v), e.v, [e.m.id]);
+        push([...endPlaces(e, content), ...endPlaces(on, content)], content, e.v, [e.m.id, on.m.id]);
+      } else push(endPlaces(e, content), content, e.v, [e.m.id]);
     }
   }
 
@@ -2156,8 +2186,11 @@ const diagramLabels = (
     if (isConstant(pw)) {
       if (!once(pw)) continue;
       const v = evalPiece(pw[0], pw[0].x0);
-      // Mid-member, or a quarter of the way along either way when a load's value stands there
-      const along = [0.5, 0.25, 0.75].flatMap((t) => spots(tipAt(f.length * t, v), outOf(v), mode));
+      // Mid-member, or a few px along either way when a load's value stands there
+      const dir = { x: f.tx, y: f.tz };
+      const along = LABEL_NUDGES_PX.flatMap((nudge) =>
+        spots(at(f, f.length / 2, n.x * k * v + dir.x * nudge, n.y * k * v + dir.y * nudge), outOf(v), mode)
+      );
       if (Math.abs(v) > zero) push(along, number(v), v, [m.id]);
       continue;
     }
@@ -2298,16 +2331,17 @@ const barForceLabels = (
     const up = { x: Math.sin(r), y: -Math.cos(r) };
     const full = number(v);
     const texts = [...new Set([full, number(v)])];
-    // Anywhere in the middle 60 % of the bar, from the middle outward, clear of the joints.
-    const positions = [0.5, 0.4, 0.6, 0.3, 0.7, 0.2, 0.8];
+    // Along the bar as the text runs, px
+    const along = { x: Math.cos(r), y: Math.sin(r) };
     const places: TextPlacement[] = [];
-    // In order: slide along the bar, then flip to its other side, then a smaller font, then no unit.
+    // In order: the middle on either side, then a few px along it (LABEL_NUDGES_PX), then a smaller
+    // font, then no unit.
     for (const content of texts) {
       for (const size of sizes) {
-        for (const side of [1, -1]) {
-          for (const t of positions) {
+        for (const nudge of LABEL_NUDGES_PX) {
+          for (const side of [1, -1]) {
             places.push({
-              at: at(f, f.length * t, up.x * 3 * side, up.y * 3 * side),
+              at: at(f, f.length / 2, up.x * 3 * side + along.x * nudge, up.y * 3 * side + along.y * nudge),
               align: 'middle',
               baseline: side > 0 ? 'bottom' : 'top',
               text: content,
@@ -2342,8 +2376,18 @@ const barForceLabels = (
  */
 const MEMBER_LABEL_PRIORITY = 3;
 const NAMES: readonly string[] = ['memberLabels'];
-/** How far a member's name may move along it from the middle, px: the middle first */
-const NAME_NUDGES_PX = [0, 12, -12, 24, -24] as const;
+/**
+ * How far a label may move along its member from its place, px: its place first, then a little
+ * either way, never a share of the member, which on a long one sent it far from what it labels
+ */
+const LABEL_NUDGES_PX = [0, 12, -12, 24, -24] as const;
+/**
+ * Where a member end's value goes when the spots round its tip are taken: further out along its own
+ * ordinate first (px from the tip), which keeps it on the line it labels; only then, on a constant
+ * diagram, a little in along the edge (px from the end)
+ */
+const END_FURTHER_OUT_PX = [24, 32, 40] as const;
+const END_INWARD_PX = [16, 32] as const;
 const memberLabelItems = (model: PlotModel, frames: ReadonlyMap<string, MemberFrame>, size: Sizes): SceneItem[] =>
   model.members.flatMap((m): SceneItem[] => {
     const f = frames.get(m.id);
@@ -2367,7 +2411,7 @@ const memberLabelItems = (model: PlotModel, frames: ReadonlyMap<string, MemberFr
     // The middle on both sides first: a name kept off one side crosses to the other, a few px away.
     // Then nudged along, never further than a name's width or two: slid off down the member it
     // looked lost, and it gives way rather than wander
-    for (const nudge of NAME_NUDGES_PX) {
+    for (const nudge of LABEL_NUDGES_PX) {
       for (const side of [away, -away]) {
         // Across a diagram's line if need be, readable on its halo
         places.push({
@@ -2558,7 +2602,9 @@ export const buildStructureScene = (model: PlotModel, options: StructureSceneOpt
     const valueMarks: SceneItem[][] = [];
     for (const q of ['N', 'V', 'M'] as const) {
       if (!layers.has(q) || !(k[q] > 0)) continue;
-      if (q === 'N' && isBarStructure(model, results.members)) {
+      // A truss's forces one per bar, mid-bar - unless every constant diagram is to be written at its
+      // ends, as an app asks: then a bar's as well, drawn as any other diagram
+      if (q === 'N' && options.constantDiagrams !== 'ends' && isBarStructure(model, results.members)) {
         items.push(...barForceLabels(model, frames, results.members, options));
         continue;
       }

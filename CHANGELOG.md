@@ -2,6 +2,19 @@
 
 All notable changes to `@edubeam/plot` are listed here. The project follows [Semantic Versioning](https://semver.org).
 
+## unreleased
+
+- A member end's value stands on its own member's side of the node, never reaching past the end over the next
+  member, where it read as that member's. Crowded, it steps further out along its ordinate, and on a constant
+  diagram only then a little in along its edge, so a member keeps its value rather than lose it.
+- With `constantDiagrams: 'ends'`, a truss's forces are written at the bars' ends as any other diagram, not once
+  mid-bar.
+- A truss bar's force, a constant diagram's value and a diagram's degree move only a few px along their member
+  when their place is taken, as a member's name does, instead of a share of its length; a bar's force tries the
+  bar's other side at the middle first.
+- `lastGroups`: groups whose labels are placed after every other, the yielding ones too, so labels that matter
+  least (a member's name) find room round the rest instead of taking a place a label never left out must cover.
+
 ## 0.3.2 (2026-11-21)
 
 ## unreleased

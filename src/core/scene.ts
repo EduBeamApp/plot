@@ -553,6 +553,12 @@ export interface ResolveOptions {
    */
   readonly yieldingGroups?: ReadonlySet<string>;
   /**
+   * Groups placed after every other, the yielding ones too: labels that matter least (a member's
+   * name), which find room round everything else or give way, rather than take a place a label that
+   * is never left out then has to cover.
+   */
+  readonly lastGroups?: ReadonlySet<string>;
+  /**
    * Groups whose labels are never left out: with no free place, at the place that covers the least
    * of the labels already kept (its first place among equals).
    */
@@ -714,8 +720,17 @@ export const placeLabels = (
   // changes them; each result's numbers then find room around them.
   const lateGroups = options.lateGroups;
   const yielding = options.yieldingGroups;
+  const last = options.lastGroups;
   const late = (label: SceneText) =>
-    yielding?.has(label.group) ? 3 : alternativeGroups.has(label.group) ? 2 : lateGroups?.has(label.group) ? 1 : 0;
+    last?.has(label.group)
+      ? 4
+      : yielding?.has(label.group)
+        ? 3
+        : alternativeGroups.has(label.group)
+          ? 2
+          : lateGroups?.has(label.group)
+            ? 1
+            : 0;
   // Among equal given data, the label with the fewest places goes first: one with a single place (a
   // load's value at its end) takes it before a label that could stand elsewhere (a nodal force's)
   // takes it from it - and is then kept on top of it, never being left out. Other labels keep their
