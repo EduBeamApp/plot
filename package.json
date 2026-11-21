@@ -80,7 +80,7 @@
     "oxfmt": "^0.79.0",
     "oxlint": "^1.94.0",
     "publint": "^0.3.25",
-    "typescript": "^5.9.3",
+    "typescript": "^7.0.2",
     "vite": "^8.3.8",
     "vitest": "^5.1.1",
     "vue": "^3.5.43",
