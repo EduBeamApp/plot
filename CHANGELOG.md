@@ -2,7 +2,7 @@
 
 All notable changes to `@edubeam/plot` are listed here. The project follows [Semantic Versioning](https://semver.org).
 
-## 0.3.1 (unreleased)
+## 0.3.1 (2026-11-21)
 
 - Every diagram has an undrawn `hitArea` path covering it, whatever its fill, tagged with its member, so an app
   can treat the pointer over a diagram as over its member.
